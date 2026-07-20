@@ -1,0 +1,24 @@
+name: Morning Briefing
+
+on:
+  schedule:
+    - cron: '30 20 * * 1-5'   # UTC 20:30 = 日本時間 翌5:30（月〜金）
+  workflow_dispatch:           # 手動実行も可能にする
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - run: pip install -r requirements.txt
+
+      - run: python scripts/morning_briefing.py
+        env:
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
