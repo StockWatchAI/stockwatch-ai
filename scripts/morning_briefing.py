@@ -81,3 +81,55 @@ def main():
     for sym in all_symbols:
         try:
             q = get_quote(sym)
+            n = get_news(sym)
+            s = summarize(sym, q, n)
+            cache[sym] = {"quote": q, "summary": s}
+            print(f"{sym}: {s}")
+        except Exception as e:
+            print(f"{sym} の処理に失敗: {repr(e)}")
+            traceback.print_exc()
+
+    for u in users:
+        data = u.to_dict()
+        token = data.get("fcmToken")
+        watchlist = data.get("watchlist", [])
+        if not token or not watchlist:
+            print(f"{u.id}: トークンかウォッチリストが空のためスキップ")
+            continue
+
+        valid = [s for s in watchlist if s in cache]
+        if not valid:
+            print(f"{u.id}: 有効な銘柄データがないためスキップ")
+            continue
+
+        lead = max(valid, key=lambda s: abs(cache[s]["quote"]["change_pct"]))
+        lq = cache[lead]["quote"]
+        title = f"{lead} {lq['change_pct']:+.1f}%"
+        body = cache[lead]["summary"]
+
+        db.collection("briefings").document(u.id).set({
+            "createdAt": firestore.SERVER_TIMESTAMP,
+            "items": [
+                {
+                    "symbol": s,
+                    "price": cache[s]["quote"]["price"],
+                    "changePct": cache[s]["quote"]["change_pct"],
+                    "summary": cache[s]["summary"],
+                }
+                for s in valid
+            ],
+        })
+
+        msg = messaging.Message(
+            notification=messaging.Notification(title=title, body=body),
+            token=token,
+        )
+        try:
+            res = messaging.send(msg)
+            print(f"通知送信成功: {u.id} → {title} / FCM応答={res}")
+        except Exception as e:
+            print(f"通知送信失敗: {u.id} → {repr(e)}")
+
+
+if __name__ == "__main__":
+    main()
