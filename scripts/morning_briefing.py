@@ -1,16 +1,17 @@
 import os
 import json
+import traceback
 import requests
 import firebase_admin
 from firebase_admin import credentials, firestore, messaging
 from anthropic import Anthropic
 from datetime import datetime, timedelta
 
-FINNHUB_KEY = os.environ["FINNHUB_API_KEY"]
-ANTHROPIC_KEY = os.environ["ANTHROPIC_API_KEY"]
+FINNHUB_KEY = os.environ["FINNHUB_API_KEY"].strip()
+ANTHROPIC_KEY = os.environ["ANTHROPIC_API_KEY"].strip()
 
-print(f"FINNHUBキー: {len(FINNHUB_KEY)}文字 先頭4文字={FINNHUB_KEY[:4]}")
-print(f"ANTHROPICキー: {len(ANTHROPIC_KEY)}文字 先頭7文字={ANTHROPIC_KEY[:7]}")
+print(f"FINNHUBキー: {len(FINNHUB_KEY)}文字")
+print(f"ANTHROPICキー: {len(ANTHROPIC_KEY)}文字")
 
 cred = credentials.Certificate(json.loads(os.environ["FIREBASE_SERVICE_ACCOUNT"]))
 firebase_admin.initialize_app(cred)
@@ -35,13 +36,14 @@ def get_news(symbol):
         "https://finnhub.io/api/v1/company-news",
         params={
             "symbol": symbol,
-            "from": str(today - timedelta(days=2)),
+            "from": str(today - timedelta(days=3)),
             "to": str(today),
             "token": FINNHUB_KEY,
         },
         timeout=10,
     )
-    items = r.json()[:3]
+    data = r.json()
+    items = data[:3] if isinstance(data, list) else []
     print(f"  [{symbol}] ニュース {len(items)}件")
     return [i.get("headline", "") for i in items]
 
@@ -79,56 +81,3 @@ def main():
     for sym in all_symbols:
         try:
             q = get_quote(sym)
-            n = get_news(sym)
-            s = summarize(sym, q, n)
-            cache[sym] = {"quote": q, "summary": s}
-            print(f"{sym}: {s}")
-        except Exception as e:
-            import traceback
-            print(f"{sym} の処理に失敗: {repr(e)}")
-            traceback.print_exc()
-
-    for u in users:
-        data = u.to_dict()
-        token = data.get("fcmToken")
-        watchlist = data.get("watchlist", [])
-        if not token or not watchlist:
-            print(f"{u.id}: トークンかウォッチリストが空のためスキップ")
-            continue
-
-        valid = [s for s in watchlist if s in cache]
-        if not valid:
-            print(f"{u.id}: 有効な銘柄データがないためスキップ")
-            continue
-
-        lead = max(valid, key=lambda s: abs(cache[s]["quote"]["change_pct"]))
-        lq = cache[lead]["quote"]
-        title = f"{lead} {lq['change_pct']:+.1f}%"
-        body = cache[lead]["summary"]
-
-        db.collection("briefings").document(u.id).set({
-            "createdAt": firestore.SERVER_TIMESTAMP,
-            "items": [
-                {
-                    "symbol": s,
-                    "price": cache[s]["quote"]["price"],
-                    "changePct": cache[s]["quote"]["change_pct"],
-                    "summary": cache[s]["summary"],
-                }
-                for s in valid
-            ],
-        })
-
-        msg = messaging.Message(
-            notification=messaging.Notification(title=title, body=body),
-            token=token,
-        )
-        try:
-            res = messaging.send(msg)
-            print(f"通知送信成功: {u.id} → {title} / FCM応答={res}")
-        except Exception as e:
-            print(f"通知送信失敗: {u.id} → {repr(e)}")
-
-
-if __name__ == "__main__":
-    main()
