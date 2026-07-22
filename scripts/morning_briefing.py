@@ -87,8 +87,13 @@ def main():
                 "summary": summarize(sym, q, n),
             }
             print(f"{sym}: {cache[sym]['summary']}")
-        except Exception as e:
-            print(f"{sym} の処理に失敗: {e}")
+
+except Exception as e:
+            import traceback
+            print(f"{sym} の処理に失敗: {repr(e)}")
+            traceback.print_exc() 
+
+print(f"FINNHUBキーの長さ: {len(FINNHUB_KEY)} 文字, 先頭4文字: {FINNHUB_KEY[:4]}")
 
     # 2. ユーザーごとに通知を送る
     for u in users:
