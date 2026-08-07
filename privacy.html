@@ -48,30 +48,40 @@
             <li>カスタムプロンプト（自由入力のまとめ方指示）</li>
         </ul>
         <p><strong>2.2 自動的に収集される情報</strong></p>
-        <p>本アプリは、現在のバージョンにおいて、お客様の個人を特定できる情報（氏名、メールアドレス、電話番号等）を収集しません。</p>
+        <p>本アプリは、氏名・メールアドレス・電話番号など、お客様を直接特定する情報を収集しません。一方で、以下の情報を自動的に取得します。</p>
+        <ul>
+            <li>匿名の利用者ID（Firebase Authenticationの匿名認証により自動的に発行される識別子。お客様個人を特定するものではありません）</li>
+            <li>プッシュ通知用のデバイストークン（FCMトークン）</li>
+        </ul>
 
         <h2>3. 情報の利用目的</h2>
         <p>取り扱う情報は、以下の目的でのみ利用します。</p>
         <ul>
-            <li>ニュースの取得および表示</li>
-            <li>AIによるニュース要約の生成</li>
+            <li>株価およびニュースの取得および表示</li>
+            <li>AIによる要約の生成</li>
             <li>ウォッチリストおよびユーザー設定の保存</li>
+            <li>プッシュ通知の配信</li>
             <li>アプリの機能改善</li>
         </ul>
 
         <h2>4. 第三者サービスとの連携</h2>
         <p>本アプリは、以下の第三者サービスを利用しています。各サービスのプライバシーポリシーもあわせてご確認ください。</p>
         <ul>
-            <li><strong>Finnhub</strong>（ニュースデータの取得）：<a href="https://finnhub.io/terms-of-service" target="_blank">Finnhub Terms of Service</a></li>
+            <li><strong>Finnhub</strong>（米国株の株価・ニュースの取得、銘柄検索）：<a href="https://finnhub.io/terms-of-service" target="_blank">Finnhub Terms of Service</a></li>
             <li><strong>OpenAI</strong>（AI要約の生成）：<a href="https://openai.com/policies/privacy-policy" target="_blank">OpenAI Privacy Policy</a></li>
+            <li><strong>Firebase（Google）</strong>（匿名認証、ウォッチリストの保存、プッシュ通知の配信）：<a href="https://policies.google.com/privacy" target="_blank">Google Privacy Policy</a></li>
+            <li><strong>Yahoo Finance</strong>（日本株の株価の取得）：<a href="https://legal.yahoo.com/us/en/yahoo/privacy/index.html" target="_blank">Yahoo Privacy Policy</a></li>
+            <li><strong>Financial Modeling Prep</strong>（時間外の株価の取得）：<a href="https://site.financialmodelingprep.com/privacy-policy" target="_blank">FMP Privacy Policy</a></li>
         </ul>
-        <p>AIによる要約を生成する際、ニュースの見出しおよび要約テキストがOpenAIのAPIに送信されます。お客様の個人情報がこれらのサービスに送信されることはありません。</p>
+        <p>AIによる要約を生成する際、株価の数値、ニュースの見出しおよび要約テキストがOpenAIのAPIに送信されます。株価・ニュースの取得先には、お客様が閲覧している銘柄コードが送信されます。これらのサービスに、お客様を直接特定する情報が送信されることはありません。</p>
 
         <h2>5. データの保存</h2>
-        <p>ウォッチリストやAI設定は、お客様のデバイス内（UserDefaults）に保存されます。当社のサーバーにデータが送信されることはありません。</p>
+        <p>ウォッチリストやAI設定は、お客様のデバイス内（UserDefaults）に保存されます。</p>
+        <p>これに加えて、プッシュ通知の配信に必要な範囲で、ウォッチリストに登録された銘柄コードとFCMトークンを、匿名の利用者IDに紐づけてFirebase（Cloud Firestore）に保存します。保存されるのはこの3点のみで、氏名やメールアドレスなどは含まれません。</p>
 
         <h2>6. データの削除</h2>
-        <p>本アプリをアンインストールすると、デバイスに保存されたすべてのデータが削除されます。</p>
+        <p>本アプリをアンインストールすると、デバイスに保存されたデータは削除されます。</p>
+        <p>Firebaseに保存された情報（匿名の利用者ID、銘柄コード、FCMトークン）は、アンインストール後もサーバー上に残ります。削除をご希望の場合は、9章のお問い合わせ先までご連絡ください。ご連絡から合理的な期間内に削除します。</p>
 
         <h2>7. お子様のプライバシー</h2>
         <p>本アプリは、13歳未満のお子様を対象としたものではありません。13歳未満のお子様から意図的に個人情報を収集することはありません。</p>
@@ -84,7 +94,7 @@
         <p><strong>StockWatch Labs</strong><br>
         メール：sh.hirokawa@icloud.com</p>
 
-        <p class="updated">最終更新日：2026年2月10日</p>
+        <p class="updated">最終更新日：2026年8月7日</p>
         <div class="footer">&copy; 2026 StockWatch Labs. All rights reserved.</div>
     </div>
 </body>
