@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>StockWatch AI — 米国株ニュースをAIが日本語で要約</title>
+    <title>StockWatch AI — 米国株・日本株の値動きとニュースをAIが日本語で要約</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -34,16 +34,18 @@
         .feature-icon { font-size: 24px; flex-shrink: 0; width: 32px; text-align: center; }
         .feature-text h3 { font-size: 15px; color: #1a1a1a; margin-bottom: 2px; }
         .feature-text p { font-size: 13px; color: #666; }
-        .coming-soon {
+        .download {
             display: inline-block;
-            background: #eee;
-            color: #999;
+            background: #1a1a1a;
+            color: #fff;
             padding: 14px 36px;
             border-radius: 12px;
             font-size: 16px;
             font-weight: bold;
             margin-top: 24px;
+            text-decoration: none;
         }
+        .download:hover { background: #333; }
         .links { display: flex; justify-content: center; gap: 24px; margin-top: 32px; flex-wrap: wrap; }
         .links a { font-size: 13px; color: #999; text-decoration: none; }
         .links a:hover { color: #667eea; text-decoration: underline; }
@@ -54,14 +56,14 @@
     <div class="container">
         <div class="icon">📊</div>
         <h1>StockWatch AI</h1>
-        <p class="tagline">米国株ニュースをAIが日本語で要約</p>
+        <p class="tagline">米国株・日本株の値動きとニュースをAIが日本語で要約</p>
 
         <div class="features">
             <div class="feature">
                 <div class="feature-icon">🤖</div>
                 <div class="feature-text">
-                    <h3>AIニュース要約</h3>
-                    <p>英語ニュースをAIがリアルタイムで分析・日本語で要約</p>
+                    <h3>AIによる要約</h3>
+                    <p>値動きの解説から始まる要約を日本語で。米国株は英語ニュースもAIが分析</p>
                 </div>
             </div>
             <div class="feature">
@@ -87,7 +89,7 @@
             </div>
         </div>
 
-        <div class="coming-soon">🚀 Coming Soon</div>
+        <a class="download" href="https://apps.apple.com/jp/app/stockwatch-ai/id6759182023">App Storeでダウンロード</a>
 
         <div class="links">
             <a href="privacy.html">プライバシーポリシー</a>
