@@ -1,0 +1,50 @@
+name: Market Close
+
+on:
+  schedule:
+    # 東京市場は 15:30 JST 引け。余裕を見て 15:45 JST に送る。
+    # JST は UTC+9 固定なので、UTC 06:45 が JST 15:45。曜日は同じ暦日に収まる。
+    - cron: '45 6 * * 1-5'
+
+    # 米国市場は 16:00 ET 引け。ETは夏時間で UTC との差が変わり、
+    # cron 側では切り替えられない。夏時間なら 20:00 UTC、冬時間なら 21:00 UTC が
+    # 引けなので、両方をカバーする 21:15 UTC に固定する（JST では翌 6:15）。
+    - cron: '15 21 * * 1-5'
+
+  workflow_dispatch:
+    inputs:
+      market:
+        description: '送信する市場'
+        required: true
+        default: jp
+        type: choice
+        options: [jp, us]
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - run: pip install -r requirements.txt
+
+      # どちらの cron で起動したかで対象市場を決める。
+      # 手動実行のときは入力値を使う。
+      - name: 対象市場を決める
+        id: market
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "value=${{ inputs.market }}" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event.schedule }}" = "45 6 * * 1-5" ]; then
+            echo "value=jp" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=us" >> "$GITHUB_OUTPUT"
+          fi
+
+      - run: python scripts/market_close.py ${{ steps.market.outputs.value }}
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
