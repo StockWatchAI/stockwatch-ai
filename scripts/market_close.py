@@ -31,10 +31,14 @@ MARKETS = {
     "jp": {
         "label": "東京市場",
         "indices": [("^N225", "日経平均", "円")],
+        # アプリの設定画面と対応するFirestoreの項目名。
+        # 値が無い利用者は、これまでどおり受け取る扱いにする
+        "pref": "notifyJPClose",
     },
     "us": {
         "label": "米国市場",
         "indices": [("^GSPC", "S&P500", ""), ("^DJI", "ダウ", "")],
+        "pref": "notifyUSClose",
     },
 }
 
@@ -114,15 +118,21 @@ def build_message(market, quotes):
     return title, body
 
 
-def send(title, body):
+def send(title, body, pref_key):
     users = list(db.collection("users").stream())
     print(f"ユーザー数: {len(users)}")
 
-    sent = failed = 0
+    sent = failed = skipped = 0
     for u in users:
-        token = u.to_dict().get("fcmToken")
+        data = u.to_dict()
+        token = data.get("fcmToken")
         if not token:
             print(f"{u.id}: トークンが無いためスキップ")
+            continue
+        # 設定が無い利用者は既定でオン。アプリを更新していない人にも届く
+        if data.get(pref_key, True) is False:
+            skipped += 1
+            print(f"{u.id}: {pref_key} がオフのためスキップ")
             continue
         try:
             res = messaging.send(
@@ -137,7 +147,7 @@ def send(title, body):
             failed += 1
             print(f"通知送信失敗: {u.id} → {repr(e)}")
 
-    print(f"送信 {sent} 件 / 失敗 {failed} 件")
+    print(f"送信 {sent} 件 / 失敗 {failed} 件 / 設定オフ {skipped} 件")
 
 
 def main():
@@ -170,7 +180,7 @@ def main():
         print("DRY_RUN のため送信しません")
         return
 
-    send(title, body)
+    send(title, body, conf["pref"])
 
 
 if __name__ == "__main__":

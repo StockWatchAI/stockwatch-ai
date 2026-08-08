@@ -96,6 +96,10 @@ def main():
         if not token or not watchlist:
             print(f"{u.id}: トークンかウォッチリストが空のためスキップ")
             continue
+        # アプリの通知設定。値が無い利用者は既定でオンとして扱う
+        if data.get("notifyMorning", True) is False:
+            print(f"{u.id}: notifyMorning がオフのためスキップ")
+            continue
 
         valid = [s for s in watchlist if s in cache]
         if not valid:
