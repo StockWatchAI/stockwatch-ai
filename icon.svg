@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="StockWatch AI">
+  <!-- アプリのアイコンと同じ図形。色はアプリのデザイントークンの値をそのまま使う -->
+  <rect width="1024" height="1024" rx="229" fill="#F2F2F7"/>
+  <line x1="196" y1="792" x2="828" y2="792" stroke="#C7C7CC" stroke-width="3"/>
+  <polyline points="196,700 330,604 452,648 580,462 700,516 828,316"
+            fill="none" stroke="#0D9E59" stroke-width="76"
+            stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
