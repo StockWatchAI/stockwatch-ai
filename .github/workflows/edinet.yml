@@ -1,0 +1,31 @@
+name: EDINET
+
+# **まだ手動実行だけ。** 様式を確かめる段階なので cron は置かない。
+# 取り込みと通知を作るときに schedule を足す。
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: '動かし方'
+        required: true
+        default: inspect
+        type: choice
+        options: [inspect]
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - run: pip install -r requirements.txt
+
+      # 書類一覧を読むだけ。Firestoreにも触れず通知も送らない
+      - name: 構造を確認する
+        run: python scripts/edinet.py --inspect
+        env:
+          EDINET_API_KEY: ${{ secrets.EDINET_API_KEY }}
