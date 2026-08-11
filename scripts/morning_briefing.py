@@ -45,7 +45,11 @@ def get_news(symbol):
     data = r.json()
     items = data[:3] if isinstance(data, list) else []
     print(f"  [{symbol}] ニュース {len(items)}件")
-    return [i.get("headline", "") for i in items]
+    # 通知をタップしたときに開く記事が要るので、見出しとURLを対で持つ
+    return [
+        {"headline": i.get("headline", ""), "url": i.get("url", "")}
+        for i in items
+    ]
 
 
 def summarize(symbol, quote, headlines):
@@ -82,8 +86,8 @@ def main():
         try:
             q = get_quote(sym)
             n = get_news(sym)
-            s = summarize(sym, q, n)
-            cache[sym] = {"quote": q, "summary": s}
+            s = summarize(sym, q, [i["headline"] for i in n])
+            cache[sym] = {"quote": q, "summary": s, "news": n}
             print(f"{sym}: {s}")
         except Exception as e:
             print(f"{sym} の処理に失敗: {repr(e)}")
@@ -124,8 +128,16 @@ def main():
             ],
         })
 
+        # タップしたときに開く記事。ニュースが取れない銘柄もあるので空を許す。
+        # 空文字を送っておけばアプリ側は「記事なし」として銘柄だけ開く
+        lead_news = cache[lead].get("news") or []
+        article_url = lead_news[0]["url"] if lead_news else ""
+
         msg = messaging.Message(
             notification=messaging.Notification(title=title, body=body),
+            # アプリはこの2つを見てニュースタブと記事を開く。
+            # キー名はアプリ側のNotificationRouterと合わせる
+            data={"symbol": lead, "url": article_url},
             token=token,
         )
         try:
