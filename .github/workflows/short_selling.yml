@@ -15,15 +15,6 @@ on:
         type: choice
         options: [inspect, dry-run, send]
 
-  # 取り込みの実装を詰めている間だけ、作業ブランチへのpushで確認用に走らせる。
-  # 様式の確認が済んだらこのトリガーは外す
-  push:
-    branches: ['claude/**']
-    paths:
-      - 'scripts/short_selling.py'
-      - '.github/workflows/short_selling.yml'
-      - 'requirements.txt'
-
 jobs:
   collect:
     runs-on: ubuntu-latest
@@ -36,10 +27,10 @@ jobs:
 
       - run: pip install -r requirements.txt
 
-      # pushで走らせたときは、実物の様式を出すだけにする。
-      # 認証情報を使わないので、確認のために本番のデータへ触れずに済む
+      # 様式が変わったと疑うときに、認証情報を使わずに確かめられる。
+      # 本番のデータに触れないので、いつ走らせても副作用が無い
       - name: 構造を確認する
-        if: github.event_name == 'push' || inputs.mode == 'inspect'
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'inspect'
         run: python scripts/short_selling.py --inspect
 
       - name: 取り込む（通知は送らない）
