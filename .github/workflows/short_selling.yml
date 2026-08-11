@@ -1,0 +1,56 @@
+name: Short Selling
+
+on:
+  schedule:
+    # JPXは毎営業日17時ごろに公表する。反映の遅れを見て 17:30 JST に取り込む。
+    # JST は UTC+9 固定なので UTC 08:30 が JST 17:30。曜日は同じ暦日に収まるため 1-5。
+    - cron: '30 8 * * 1-5'
+
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: '動かし方'
+        required: true
+        default: inspect
+        type: choice
+        options: [inspect, dry-run, send]
+
+  # 取り込みの実装を詰めている間だけ、作業ブランチへのpushで確認用に走らせる。
+  # 様式の確認が済んだらこのトリガーは外す
+  push:
+    branches: ['claude/**']
+    paths:
+      - 'scripts/short_selling.py'
+      - '.github/workflows/short_selling.yml'
+      - 'requirements.txt'
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - run: pip install -r requirements.txt
+
+      # pushで走らせたときは、実物の様式を出すだけにする。
+      # 認証情報を使わないので、確認のために本番のデータへ触れずに済む
+      - name: 構造を確認する
+        if: github.event_name == 'push' || inputs.mode == 'inspect'
+        run: python scripts/short_selling.py --inspect
+
+      - name: 取り込む（通知は送らない）
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'dry-run'
+        run: python scripts/short_selling.py
+        env:
+          DRY_RUN: '1'
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+
+      - name: 取り込んで通知する
+        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'send')
+        run: python scripts/short_selling.py
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
