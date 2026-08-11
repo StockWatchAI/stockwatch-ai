@@ -1,8 +1,14 @@
 name: EDINET
 
-# **まだ手動実行だけ。** 様式を確かめる段階なので cron は置かない。
-# 取り込みと通知を作るときに schedule を足す。
 on:
+  schedule:
+    # JST 平日 8:00。**UTC 23:00 は翌日のJSTになるので曜日は 0-4（日〜木）。**
+    # 1-5 と書くとJSTの火〜土に流れる（月曜が来ず土曜に来る）。
+    #
+    # 前営業日ぶんの一覧は深夜（実測で翌01:09）に確定するため、朝に取れば
+    # 前日の提出が漏れなく入る。寄り付き（9:00）の前に届くので判断に間に合う。
+    - cron: '0 23 * * 0-4'
+
   workflow_dispatch:
     inputs:
       mode:
@@ -10,7 +16,7 @@ on:
         required: true
         default: inspect
         type: choice
-        options: [inspect]
+        options: [inspect, dry-run, send]
 
 jobs:
   collect:
@@ -26,6 +32,22 @@ jobs:
 
       # 書類一覧を読むだけ。Firestoreにも触れず通知も送らない
       - name: 構造を確認する
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'inspect'
         run: python scripts/edinet.py --inspect
         env:
           EDINET_API_KEY: ${{ secrets.EDINET_API_KEY }}
+
+      - name: 取り込む（通知は送らない）
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'dry-run'
+        run: python scripts/edinet.py
+        env:
+          DRY_RUN: '1'
+          EDINET_API_KEY: ${{ secrets.EDINET_API_KEY }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+
+      - name: 取り込んで通知する
+        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'send')
+        run: python scripts/edinet.py
+        env:
+          EDINET_API_KEY: ${{ secrets.EDINET_API_KEY }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
