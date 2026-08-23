@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Privacy Policy | StockWatch AI</title>
+    <link rel="icon" type="image/svg+xml" href="../icon.svg">
+    <link rel="alternate" hreflang="ja" href="../privacy.html">
+    <link rel="alternate" hreflang="en" href="privacy.html">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+            line-height: 1.8;
+            color: #333;
+            background: #fafafa;
+            padding: 20px;
+        }
+        .container {
+            max-width: 720px;
+            margin: 0 auto;
+            background: #fff;
+            padding: 40px 32px;
+            border-radius: 12px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+        }
+        h1 { font-size: 24px; margin-bottom: 8px; color: #1a1a1a; }
+        .app-name { font-size: 14px; color: #666; margin-bottom: 32px; }
+        h2 { font-size: 18px; margin-top: 32px; margin-bottom: 12px; color: #1a1a1a; padding-bottom: 6px; border-bottom: 1px solid #eee; }
+        p { margin-bottom: 16px; font-size: 15px; }
+        ul { margin: 8px 0 16px 24px; font-size: 15px; }
+        li { margin-bottom: 6px; }
+        .lang { text-align: right; font-size: 13px; margin-bottom: 8px; }
+        .lang a { color: #4A6CF7; text-decoration: none; }
+        .lang a:hover { text-decoration: underline; }
+        .updated { font-size: 13px; color: #999; margin-top: 40px; text-align: right; }
+        .footer { text-align: center; margin-top: 32px; padding-top: 24px; border-top: 1px solid #eee; font-size: 13px; color: #999; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <p class="lang"><a href="../privacy.html">日本語</a></p>
+        <h1>Privacy Policy</h1>
+        <p class="app-name">StockWatch AI (provided by StockWatch Labs)</p>
+
+        <h2>1. Introduction</h2>
+        <p>StockWatch Labs ("we", "us") respects the privacy of everyone who uses the StockWatch AI app ("the app") and is committed to protecting personal information. This policy explains how information is handled in the app.</p>
+
+        <h2>2. Information We Handle</h2>
+        <p><strong>2.1 Information you provide</strong></p>
+        <ul>
+            <li>The stocks on your watchlist (ticker symbols)</li>
+            <li>Your AI personality and summary style settings</li>
+            <li>Your app language and AI output language settings</li>
+            <li>Your custom prompt (free-text instructions for how summaries are written)</li>
+        </ul>
+        <p><strong>2.2 Information collected automatically</strong></p>
+        <p>The app does not collect information that directly identifies you, such as your name, email address or phone number. It does collect the following automatically:</p>
+        <ul>
+            <li>An anonymous user ID (an identifier issued automatically by Firebase Authentication's anonymous sign-in; it does not identify you personally)</li>
+            <li>A device token for push notifications (FCM token)</li>
+        </ul>
+
+        <h2>3. How We Use Information</h2>
+        <p>We use the information we handle only for the following purposes:</p>
+        <ul>
+            <li>Retrieving and displaying share prices and news</li>
+            <li>Generating AI summaries</li>
+            <li>Storing your watchlist and settings</li>
+            <li>Delivering push notifications</li>
+            <li>Improving the app</li>
+        </ul>
+
+        <h2>4. Third-Party Services</h2>
+        <p>The app uses the third-party services listed below. Please also review each service's own privacy policy.</p>
+        <ul>
+            <li><strong>Yahoo Finance</strong> (share prices, price history, dividends and index levels for all supported markets; symbol search): <a href="https://legal.yahoo.com/us/en/yahoo/privacy/index.html" target="_blank">Yahoo Privacy Policy</a></li>
+            <li><strong>Finnhub</strong> (share prices, news, earnings dates and company logos for US stocks): <a href="https://finnhub.io/terms-of-service" target="_blank">Finnhub Terms of Service</a></li>
+            <li><strong>Google News</strong> (news for markets outside the United States): <a href="https://policies.google.com/privacy" target="_blank">Google Privacy Policy</a></li>
+            <li><strong>OpenAI</strong> (generating AI summaries): <a href="https://openai.com/policies/privacy-policy" target="_blank">OpenAI Privacy Policy</a></li>
+            <li><strong>Firebase (Google)</strong> (anonymous authentication, storing your watchlist and settings, delivering push notifications): <a href="https://policies.google.com/privacy" target="_blank">Google Privacy Policy</a></li>
+            <li><strong>Financial Modeling Prep</strong> (extended-hours quotes for US stocks): <a href="https://site.financialmodelingprep.com/privacy-policy" target="_blank">FMP Privacy Policy</a></li>
+        </ul>
+        <p>When an AI summary is generated, the price figures and the headlines and summary text of the news articles are sent to the OpenAI API. The ticker symbol you are viewing is sent to the price sources. The news sources receive the ticker symbol along with the company name and the language being searched. No information that directly identifies you is sent to any of these services.</p>
+
+        <h2>5. Data Storage</h2>
+        <p>Your watchlist and AI settings are stored on your device (in UserDefaults).</p>
+        <p>In addition, to the extent needed to deliver push notifications, the following is stored in Firebase (Cloud Firestore) against your anonymous user ID:</p>
+        <ul>
+            <li>The ticker symbols on your watchlist</li>
+            <li>Your device token for push notifications (FCM token)</li>
+            <li>Your notification preferences (which notifications you have chosen to receive)</li>
+            <li>Your app language and AI output language (used to decide which language notifications are written in)</li>
+        </ul>
+        <p>Nothing beyond the above is stored. It contains no name, email address or other information that directly identifies you.</p>
+
+        <h2>6. Deleting Your Data</h2>
+        <p>Deleting the app removes the data stored on your device.</p>
+        <p>The information held in Firebase (your anonymous user ID, ticker symbols, FCM token, notification preferences and language settings) remains on the server after the app is deleted. If you would like it removed, please contact us using the details in section 9. We will delete it within a reasonable period of your request.</p>
+
+        <h2>7. Children's Privacy</h2>
+        <p>The app is not directed at children under 13. We do not knowingly collect personal information from children under 13.</p>
+
+        <h2>8. Changes to This Policy</h2>
+        <p>We may update this privacy policy as needed. If a change is significant, we will announce it in the app or on this page.</p>
+
+        <h2>9. Contact</h2>
+        <p>For questions about this privacy policy, please contact:</p>
+        <p><strong>StockWatch Labs</strong><br>
+        Email: sh.hirokawa@icloud.com</p>
+
+        <p class="updated">Last updated: August 24, 2026</p>
+        <div class="footer">&copy; 2026 StockWatch Labs. All rights reserved.</div>
+    </div>
+</body>
+</html>
