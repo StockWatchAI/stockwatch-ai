@@ -7,6 +7,8 @@ from firebase_admin import credentials, firestore, messaging
 from anthropic import Anthropic
 from datetime import datetime, timedelta
 
+import i18n
+
 FINNHUB_KEY = os.environ["FINNHUB_API_KEY"].strip()
 ANTHROPIC_KEY = os.environ["ANTHROPIC_API_KEY"].strip()
 
@@ -27,7 +29,13 @@ def get_quote(symbol):
     )
     d = r.json()
     print(f"  [{symbol}] 株価API応答: {d}")
-    return {"price": d.get("c", 0), "change_pct": d.get("dp", 0) or 0}
+    price = d.get("c") or 0
+    # **値が取れない銘柄は落とす。** Finnhubは現行プランで米国株しか返さず、
+    # 米国以外は 200 のまま全項目0で返ってくる。そのまま通すと
+    # 「7203.T +0.00%」のような中身の無い通知を送ることになる
+    if not price:
+        return None
+    return {"price": price, "change_pct": d.get("dp", 0) or 0}
 
 
 def get_news(symbol):
@@ -52,9 +60,18 @@ def get_news(symbol):
     ]
 
 
-def summarize(symbol, quote, headlines):
-    news_text = "\n".join("- " + h for h in headlines) if headlines else "- 特になし"
-    prompt = f"""あなたは米国株の朝ブリーフィングを書くアナリストです。
+def summarize(symbol, quote, headlines, language_name):
+    """1銘柄ぶんの一文を、指定された言語で書かせる。
+
+    **日本語だけ従来の文面を残す。** この文面で調整してきたので、英語の
+    プロンプトに一本化すると既存の日本語の利用者の通知が変わってしまう。
+    日本語以外は英語の指示に「この言語で書け」を添える形にする
+    （言語を増やしてもプロンプトを書き足さずに済む）。アプリ側の
+    `AIPersonality.systemPrompt` と同じ考え方。
+    """
+    if language_name == "Japanese":
+        news_text = "\n".join("- " + h for h in headlines) if headlines else "- 特になし"
+        prompt = f"""あなたは株式市場の朝ブリーフィングを書くアナリストです。
 
 銘柄: {symbol}
 株価: ${quote['price']}（前日比 {quote['change_pct']:+.2f}%）
@@ -63,13 +80,30 @@ def summarize(symbol, quote, headlines):
 
 上記をもとに、日本語で60字以内の一文を書いてください。
 値動きの理由と今日の注目点を簡潔に。前置き・挨拶・記号は不要。本文のみ出力。"""
+    else:
+        news_text = "\n".join("- " + h for h in headlines) if headlines else "- none"
+        prompt = f"""You are an analyst writing a one-line morning briefing.
+
+Ticker: {symbol}
+Price: ${quote['price']} ({quote['change_pct']:+.2f}% from the previous close)
+Recent headlines:
+{news_text}
+
+Write a single sentence in {language_name}, no more than 100 characters.
+Give the reason for the move and what to watch today. No preamble, no greeting,
+no bullet marks. Output the sentence only."""
 
     res = claude.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=200,
         messages=[{"role": "user", "content": prompt}],
     )
-    return res.content[0].text.strip()
+    # 先頭が必ずテキストとは限らないので、テキストのブロックを探して取る。
+    # ここで落ちると全員ぶんのブリーフィングが止まる
+    for block in res.content:
+        if getattr(block, "type", None) == "text":
+            return block.text.strip()
+    return ""
 
 
 def main():
@@ -81,17 +115,44 @@ def main():
         all_symbols.update(u.to_dict().get("watchlist", []))
     print(f"対象銘柄: {all_symbols}")
 
-    cache = {}
+    # 株価とニュースは言語に依らないので、銘柄ごとに1回だけ取る
+    market = {}
     for sym in all_symbols:
         try:
             q = get_quote(sym)
-            n = get_news(sym)
-            s = summarize(sym, q, [i["headline"] for i in n])
-            cache[sym] = {"quote": q, "summary": s, "news": n}
-            print(f"{sym}: {s}")
+            if q is None:
+                # 米国以外の銘柄。Finnhubが値を返さないため、この銘柄は載せない
+                print(f"{sym}: 株価が取れないためスキップ（米国株以外の可能性）")
+                continue
+            market[sym] = {"quote": q, "news": get_news(sym)}
         except Exception as e:
-            print(f"{sym} の処理に失敗: {repr(e)}")
+            print(f"{sym} の取得に失敗: {repr(e)}")
             traceback.print_exc()
+
+    # 要約は (銘柄, 言語) ごとに作る。
+    # **使われている言語のぶんだけ作る。** 利用者の大半が日本語なら、
+    # 呼び出し回数はこれまでと変わらない
+    summaries = {}
+
+    def summary_for(symbol, language_name):
+        key = (symbol, language_name)
+        if key in summaries:
+            return summaries[key]
+        entry = market[symbol]
+        try:
+            text = summarize(
+                symbol,
+                entry["quote"],
+                [i["headline"] for i in entry["news"]],
+                language_name,
+            )
+        except Exception as e:
+            print(f"{symbol}({language_name}) の要約に失敗: {repr(e)}")
+            traceback.print_exc()
+            text = ""
+        summaries[key] = text
+        print(f"{symbol} [{language_name}]: {text}")
+        return text
 
     for u in users:
         data = u.to_dict()
@@ -105,24 +166,36 @@ def main():
             print(f"{u.id}: notifyMorning がオフのためスキップ")
             continue
 
-        valid = [s for s in watchlist if s in cache]
+        valid = [s for s in watchlist if s in market]
         if not valid:
             print(f"{u.id}: 有効な銘柄データがないためスキップ")
             continue
 
-        lead = max(valid, key=lambda s: abs(cache[s]["quote"]["change_pct"]))
-        lq = cache[lead]["quote"]
+        # AIの出力言語。指定が無い利用者は表示言語、それも無ければ日本語
+        language_name = i18n.ai_language_name(data)
+
+        lead = max(valid, key=lambda s: abs(market[s]["quote"]["change_pct"]))
+        lq = market[lead]["quote"]
+        # 件名は銘柄コードと変化率だけなので、言語によらず同じ
         title = f"{lead} {lq['change_pct']:+.1f}%"
-        body = cache[lead]["summary"]
+        body = summary_for(lead, language_name)
+        if not body:
+            # 要約が作れなかったときは、事実だけの一文に落とす。
+            # 本文が空の通知を送るより、値動きだけでも伝わるほうがよい
+            body = i18n.t(
+                data,
+                f"{lead} は {lq['price']:,.2f} ドル（前日比 {lq['change_pct']:+.2f}%）です。",
+                f"{lead} is at ${lq['price']:,.2f} ({lq['change_pct']:+.2f}% from the previous close).",
+            )
 
         db.collection("briefings").document(u.id).set({
             "createdAt": firestore.SERVER_TIMESTAMP,
             "items": [
                 {
                     "symbol": s,
-                    "price": cache[s]["quote"]["price"],
-                    "changePct": cache[s]["quote"]["change_pct"],
-                    "summary": cache[s]["summary"],
+                    "price": market[s]["quote"]["price"],
+                    "changePct": market[s]["quote"]["change_pct"],
+                    "summary": summary_for(s, language_name),
                 }
                 for s in valid
             ],
@@ -130,7 +203,7 @@ def main():
 
         # タップしたときに開く記事。ニュースが取れない銘柄もあるので空を許す。
         # 空文字を送っておけばアプリ側は「記事なし」として銘柄だけ開く
-        lead_news = cache[lead].get("news") or []
+        lead_news = market[lead].get("news") or []
         article_url = lead_news[0]["url"] if lead_news else ""
 
         msg = messaging.Message(

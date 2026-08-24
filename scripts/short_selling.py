@@ -39,6 +39,8 @@ from datetime import datetime, timedelta, timezone
 
 import requests
 
+import i18n
+
 INDEX_URL = "https://www.jpx.co.jp/markets/public/short-selling/index.html"
 ORIGIN = "https://www.jpx.co.jp"
 
@@ -354,16 +356,16 @@ def notify(db, ranking):
 
     sent = failed = skipped = 0
     for u in users:
-        data = u.to_dict()
-        token = data.get("fcmToken")
+        u_data = u.to_dict()
+        token = u_data.get("fcmToken")
         if not token:
             continue
-        if data.get("notifyShortSelling", True) is False:
+        if u_data.get("notifyShortSelling", True) is False:
             skipped += 1
             continue
 
         hits = []
-        for symbol in data.get("watchlist") or []:
+        for symbol in u_data.get("watchlist") or []:
             if not symbol.upper().endswith(".T"):
                 continue
             hit = by_code.get(symbol[:-2])
@@ -374,11 +376,21 @@ def notify(db, ranking):
 
         hits.sort(key=lambda r: r["delta"], reverse=True)
         hits = hits[:TOP_N]
-        title = "空売り残高が増えた銘柄があります"
-        body = "\n".join(
-            f"{h['name'] or h['code']} {h['previous']:.2f}% → {h['ratio']:.2f}%（+{h['delta']:.2f}）"
-            for h in hits
-        )
+
+        # **銘柄名はJPXの公表のままなので日本語しか無い。** 英語では銘柄コードを
+        # 先に置く。利用者が登録しているのは `7203.T` の形なので、コードのほうが
+        # 自分の持ち銘柄と結び付けやすい
+        title = i18n.t(u_data, "空売り残高が増えた銘柄があります", "Short interest increased")
+        if i18n.display_language(u_data) == i18n.JA:
+            body = "\n".join(
+                f"{h['name'] or h['code']} {h['previous']:.2f}% → {h['ratio']:.2f}%（+{h['delta']:.2f}）"
+                for h in hits
+            )
+        else:
+            body = "\n".join(
+                f"{h['code']} {h['name']} {h['previous']:.2f}% → {h['ratio']:.2f}% (+{h['delta']:.2f})".replace("  ", " ")
+                for h in hits
+            )
         try:
             res = messaging.send(
                 messaging.Message(
