@@ -24,20 +24,30 @@ import firebase_admin
 import requests
 from firebase_admin import credentials, firestore, messaging
 
+import i18n
+
 YAHOO_CHART = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
 
-# 市場ごとの構成。表示順は通知に出したい順
+# 市場ごとの構成。表示順は通知に出したい順。
+# 指数名と単位は言語ごとに持つ（利用者の表示言語で出し分ける）
 MARKETS = {
     "jp": {
-        "label": "東京市場",
-        "indices": [("^N225", "日経平均", "円")],
+        "label_ja": "東京市場",
+        "label_en": "The Tokyo market",
+        "indices": [
+            {"symbol": "^N225", "ja": "日経平均", "en": "Nikkei 225", "unit_ja": "円", "unit_en": ""},
+        ],
         # アプリの設定画面と対応するFirestoreの項目名。
         # 値が無い利用者は、これまでどおり受け取る扱いにする
         "pref": "notifyJPClose",
     },
     "us": {
-        "label": "米国市場",
-        "indices": [("^GSPC", "S&P500", ""), ("^DJI", "ダウ", "")],
+        "label_ja": "米国市場",
+        "label_en": "US markets",
+        "indices": [
+            {"symbol": "^GSPC", "ja": "S&P500", "en": "S&P 500", "unit_ja": "", "unit_en": ""},
+            {"symbol": "^DJI", "ja": "ダウ", "en": "Dow", "unit_ja": "", "unit_en": ""},
+        ],
         "pref": "notifyUSClose",
     },
 }
@@ -100,25 +110,44 @@ def traded_today(data):
     return market_date == today
 
 
-def build_message(market, quotes):
-    """通知の件名と本文を組み立てる。"""
-    conf = MARKETS[market]
+def build_message(market, quotes, language):
+    """通知の件名と本文を、指定した言語で組み立てる。
 
-    # 件名は変化率だけを並べ、通知一覧で一目で分かるようにする
-    title = "　".join(
-        f"{name} {q['change_pct']:+.2f}%" for (_, name, _), q in zip(conf["indices"], quotes)
+    `language` は `i18n.JA` か `i18n.EN`。**全員ぶんを1回で作らない。**
+    利用者ごとに表示言語が違うため、言語の数だけ作って送るときに選ぶ。
+    """
+    conf = MARKETS[market]
+    japanese = language == i18n.JA
+    key = "ja" if japanese else "en"
+
+    # 件名は変化率だけを並べ、通知一覧で一目で分かるようにする。
+    # 区切りは日本語なら全角空白、英語なら中黒（英字が続くと全角空白は間延びする）
+    separator = "　" if japanese else "  ·  "
+    title = separator.join(
+        f"{index[key]} {q['change_pct']:+.2f}%" for index, q in zip(conf["indices"], quotes)
     )
 
     lines = []
-    for (_, name, unit), q in zip(conf["indices"], quotes):
-        lines.append(
-            f"{name} {q['price']:,.2f}{unit}（前日比 {q['change']:+,.2f}）"
-        )
-    body = f"{conf['label']}が取引を終えました。\n" + "\n".join(lines)
+    for index, q in zip(conf["indices"], quotes):
+        unit = index["unit_ja"] if japanese else index["unit_en"]
+        if japanese:
+            lines.append(f"{index['ja']} {q['price']:,.2f}{unit}（前日比 {q['change']:+,.2f}）")
+        else:
+            lines.append(f"{index['en']} {q['price']:,.2f}{unit} ({q['change']:+,.2f})")
+
+    if japanese:
+        head = f"{conf['label_ja']}が取引を終えました。"
+    else:
+        head = f"{conf['label_en']} closed."
+    body = head + "\n" + "\n".join(lines)
     return title, body
 
 
-def send(title, body, pref_key):
+def send(messages, pref_key):
+    """利用者ごとに、その人の表示言語の文面を選んで送る。
+
+    `messages` は言語コード → (件名, 本文) の辞書。
+    """
     users = list(db.collection("users").stream())
     print(f"ユーザー数: {len(users)}")
 
@@ -134,6 +163,10 @@ def send(title, body, pref_key):
             skipped += 1
             print(f"{u.id}: {pref_key} がオフのためスキップ")
             continue
+
+        # 言語の指定が無い利用者は日本語。アプリを更新していない人の
+        # 通知がある日いきなり英語になるのを避ける
+        title, body = messages[i18n.display_language(data)]
         try:
             res = messaging.send(
                 messaging.Message(
@@ -157,7 +190,8 @@ def main():
     conf = MARKETS[market]
 
     quotes = []
-    for symbol, name, _ in conf["indices"]:
+    for index in conf["indices"]:
+        symbol, name = index["symbol"], index["ja"]
         try:
             data = fetch_index(symbol)
         except Exception as e:
@@ -172,15 +206,19 @@ def main():
         print(f"{name}: {data['price']:,.2f} ({data['change_pct']:+.2f}%)")
         quotes.append(data)
 
-    title, body = build_message(market, quotes)
-    print(f"件名: {title}")
-    print(f"本文: {body}")
+    # 言語ごとに1回だけ作る。利用者ごとに作ると同じ文字列を人数ぶん組み立てることになる
+    messages = {
+        lang: build_message(market, quotes, lang) for lang in (i18n.JA, i18n.EN)
+    }
+    for lang, (title, body) in messages.items():
+        print(f"[{lang}] 件名: {title}")
+        print(f"[{lang}] 本文: {body}")
 
     if os.environ.get("DRY_RUN") == "1":
         print("DRY_RUN のため送信しません")
         return
 
-    send(title, body, conf["pref"])
+    send(messages, conf["pref"])
 
 
 if __name__ == "__main__":

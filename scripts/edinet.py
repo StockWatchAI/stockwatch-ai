@@ -42,6 +42,8 @@ from datetime import date, datetime, timedelta, timezone
 
 import requests
 
+import i18n
+
 DOCUMENTS_URL = "https://api.edinet-fsa.go.jp/api/v2/documents.json"
 CODELIST_URL = "https://disclosure2dl.edinet-fsa.go.jp/searchdocument/codelist/Edinetcode.zip"
 
@@ -286,23 +288,34 @@ def notify(db, items):
 
     sent = failed = skipped = 0
     for u in users:
-        data = u.to_dict()
-        token = data.get("fcmToken")
+        u_data = u.to_dict()
+        token = u_data.get("fcmToken")
         if not token:
             continue
-        if data.get("notifyLargeHolding", True) is False:
+        if u_data.get("notifyLargeHolding", True) is False:
             skipped += 1
             continue
 
-        hits = [items[s] for s in (data.get("watchlist") or []) if s in items]
+        hits = [items[s] for s in (u_data.get("watchlist") or []) if s in items]
         if not hits:
             continue
         hits = hits[:TOP_N]
 
-        title = "大量保有報告書が提出されました"
-        body = "\n".join(
-            f"{h['name']}（{'、'.join(h['filers'][:2])}）" for h in hits
+        # **社名も提出者名もEDINETの公表のままなので日本語しか無い。**
+        # 英語では銘柄コードを先に置いて、持ち銘柄と結び付けられるようにする
+        title = i18n.t(
+            u_data,
+            "大量保有報告書が提出されました",
+            "Large shareholding report filed",
         )
+        if i18n.display_language(u_data) == i18n.JA:
+            body = "\n".join(
+                f"{h['name']}（{'、'.join(h['filers'][:2])}）" for h in hits
+            )
+        else:
+            body = "\n".join(
+                f"{h['symbol']} {h['name']} ({', '.join(h['filers'][:2])})" for h in hits
+            )
         try:
             res = messaging.send(
                 messaging.Message(
