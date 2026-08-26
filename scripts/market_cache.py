@@ -308,19 +308,33 @@ def build_symbol(symbol, key, allowed, min_kept=0):
 # Firestore
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+# 和集合を作り直す間隔。`edgar.py` の `WATCHED_MAX_AGE` と揃えてある。
+# **片方だけ長いと、新しく登録した銘柄がニュースだけ出ない／開示だけ出ない、
+# という中途半端な状態になる**
+WATCHED_MAX_AGE = timedelta(hours=1)
+
+
 def load_watched(db):
     """ウォッチリストの和集合のうち、**米国株だけ**。
 
-    `edgar.py` と同じ集約ドキュメントを読む。あちらが定期的に作り直すので、
-    こちらは読むだけにしてある（両方が書くと、どちらの更新が残るか読めない）。
+    `edgar.py` と同じ集約ドキュメントを読む。**古ければこちらでも作り直す。**
+    読むだけにしていると、`edgar.py` が回っていない時間帯（週末など）に
+    登録した銘柄がいつまでも対象に入らない。どちらが書いても同じ内容になるので、
+    先に書いたほうが残って困らない。
     """
     doc = db.collection(WATCHED_DOC[0]).document(WATCHED_DOC[1]).get()
     if doc.exists:
-        tickers = (doc.to_dict() or {}).get("tickers") or []
-        if tickers:
-            return sorted(tickers)
+        data = doc.to_dict() or {}
+        tickers = data.get("tickers") or []
+        updated = data.get("updatedAt")
+        if tickers and updated:
+            try:
+                if datetime.now(UTC) - datetime.fromisoformat(updated) < WATCHED_MAX_AGE:
+                    return sorted(tickers)
+            except ValueError:
+                pass
 
-    print("集約ドキュメントが無いので users から作る")
+    print("集約ドキュメントが古い（または無い）ので users から作る")
     symbols = set()
     for u in db.collection("users").stream():
         symbols.update((u.to_dict() or {}).get("watchlist") or [])
