@@ -71,6 +71,11 @@ API_INTERVAL = 1.0
 _last_call = 0.0
 
 
+# 実行中に出た失敗の内訳。**1銘柄ずつ印字すると本当の異常が埋もれる。**
+# FMPの無料プランは対象外の銘柄に402を返すので、47銘柄なら毎回30行以上出る
+_failures = {}
+
+
 def call(url, params, label):
     """外部APIを1回叩く。**失敗はNoneに畳む**（1銘柄で全体を止めない）"""
     global _last_call
@@ -82,9 +87,30 @@ def call(url, params, label):
         res = requests.get(url, params=params, timeout=TIMEOUT)
         res.raise_for_status()
         return res.json()
+    except requests.HTTPError as e:
+        code = e.response.status_code if e.response is not None else 0
+        # **402は「そのプランでは扱えない銘柄」。** 異常ではないので数えるだけ
+        _failures.setdefault(code, []).append(label)
+        if code != 402:
+            print(f"    {label} に失敗: {e}")
+        return None
     except Exception as e:
+        _failures.setdefault("other", []).append(label)
         print(f"    {label} に失敗: {e}")
         return None
+
+
+def report_failures():
+    """失敗の内訳をまとめて1回だけ出す"""
+    for code, labels in sorted(_failures.items(), key=lambda x: str(x[0])):
+        note = ""
+        if code == 402:
+            note = "（FMPの無料プランが扱わない銘柄。課金プランでのみ取得可）"
+        elif code == 429:
+            note = "（レート制限。API_INTERVAL を延ばす）"
+        head = ", ".join(l.split()[0] for l in labels[:12])
+        more = f" ほか{len(labels) - 12}件" if len(labels) > 12 else ""
+        print(f"  取得できず [{code}] {len(labels)}件{note}: {head}{more}")
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -394,7 +420,8 @@ def run_quotes(db, tickers):
         if not dry_run:
             db.collection(QUOTES_COLLECTION).document(symbol).set(quote)
             written += 1
-    print(f"{'DRY_RUN のため書き込まず' if dry_run else f'書き込み {written} 件'}")
+    report_failures()
+    print(f"{'DRY_RUN のため書き込まず' if dry_run else f'書き込み {written} 件 / 対象 {len(tickers)} 銘柄'}")
 
 
 def run_symbols(db, tickers):
@@ -414,7 +441,8 @@ def run_symbols(db, tickers):
         if not dry_run:
             db.collection(SYMBOLS_COLLECTION).document(symbol).set(doc)
             written += 1
-    print(f"{'DRY_RUN のため書き込まず' if dry_run else f'書き込み {written} 件'}")
+    report_failures()
+    print(f"{'DRY_RUN のため書き込まず' if dry_run else f'書き込み {written} 件 / 対象 {len(tickers)} 銘柄'}")
 
 
 def inspect():
