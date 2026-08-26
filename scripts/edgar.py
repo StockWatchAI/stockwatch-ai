@@ -94,8 +94,20 @@ MAX_PAGES = 2
 NEWS_COLLECTION = "news"
 WATCHED_DOC = ("config", "watchedTickers")
 
-# Firestoreの保持期間。TTLポリシーで自動削除させる
+# Firestoreの保持期間。
+#
+# **TTLポリシーは使えない。** Firestoreの自動削除はSparkプラン（無料）の
+# コンソールに項目が無く、設定できなかった。課金プランに上げるほどの話でもないので、
+# **取り込みのついでにここで消す**（botはAdmin SDKなので制限を受けない）。
+#
+# `expiresAt` の単一フィールドインデックスはFirestoreが自動で作るため、
+# 期限切れを引くクエリに追加の索引は要らない。
 RETENTION_DAYS = 90
+
+# 1回の実行で消す上限。**一度に全部消そうとしない。** 消し残りは次の実行で片付く
+PURGE_LIMIT = 300
+# Firestoreのバッチ書き込みの上限
+BATCH_SIZE = 400
 
 # ウォッチリストの和集合を作り直す間隔。**毎回usersを全件読むと利用者数に比例して
 # コストが増える**ので、集約ドキュメントに残して使い回す。
@@ -771,6 +783,49 @@ def already_stored(db, accession_numbers):
     return stored
 
 
+def purge_expired(db):
+    """保持期間を過ぎた提出書類を消す。
+
+    **TTLポリシーの代わり。** 放っておくと消えずに溜まり続ける。
+    1件2〜4KBでも、年単位で見ると効いてくる。
+
+    **消しすぎないように上限を置く。** 消し残っても次の実行で片付くので、
+    1回の実行を長引かせてまで全部消す必要が無い。
+    """
+    now = datetime.now(UTC)
+    try:
+        query = db.collection(NEWS_COLLECTION)
+        try:
+            # 新しいfirebase-adminはこちらを使う（位置引数のwhereは非推奨）
+            from google.cloud.firestore_v1.base_query import FieldFilter
+            query = query.where(filter=FieldFilter("expiresAt", "<", now))
+        except ImportError:
+            query = query.where("expiresAt", "<", now)
+        stale = list(query.limit(PURGE_LIMIT).stream())
+    except Exception as e:
+        # 索引が無い・権限が無いなど。**取り込みは止めない**（掃除は次回でよい）
+        print(f"期限切れの取得に失敗したので掃除を飛ばす: {e}")
+        return
+
+    if not stale:
+        return
+
+    deleted = 0
+    for i in range(0, len(stale), BATCH_SIZE):
+        batch = db.batch()
+        for doc in stale[i:i + BATCH_SIZE]:
+            batch.delete(doc.reference)
+        try:
+            batch.commit()
+            deleted += len(stale[i:i + BATCH_SIZE])
+        except Exception as e:
+            print(f"削除に失敗したので中断: {e}")
+            break
+
+    print(f"保持期間({RETENTION_DAYS}日)を過ぎた提出書類を {deleted} 件消した"
+          + ("（上限に達したので残りは次回）" if len(stale) == PURGE_LIMIT else ""))
+
+
 def to_document(entry, impact, summary, extra=None):
     now = datetime.now(UTC)
     doc = {
@@ -850,6 +905,10 @@ def build_body(entry):
 
 
 def main(db, client):
+    # **取り込みより先に掃除する。** 取り込みが途中で落ちても掃除は済んでいる
+    if os.environ.get("DRY_RUN") != "1":
+        purge_expired(db)
+
     watched = load_watched(db)
     if not watched:
         print("対象の米国株が無いため中止")
