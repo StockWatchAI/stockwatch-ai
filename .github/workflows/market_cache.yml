@@ -1,0 +1,67 @@
+name: Market Cache
+
+on:
+  schedule:
+    # 時間外気配。ETの 04:00–20:00（プレ〜アフター）を覆う。
+    # **ETはUTC-4（夏）/ UTC-5（冬）でGitHubのcronは夏時間を切り替えられない**ので、
+    # 両方を覆う広さで置く（UTC 08:00–翌01:00）。曜日は日付をまたぐ後半だけ 2-6。
+    - cron: '*/20 8-23 * * 1-5'
+    - cron: '*/20 0-1 * * 2-6'
+    # ニュース・決算・ロゴ。気配ほど頻繁に変わらないので1時間おき
+    - cron: '5 * * * *'
+
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: '動かし方'
+        required: true
+        default: inspect
+        type: choice
+        options: [inspect, quotes-dry-run, symbols-dry-run, quotes, symbols]
+
+concurrency:
+  group: market-cache-${{ github.event.schedule || github.event.inputs.mode }}
+  cancel-in-progress: false
+
+jobs:
+  cache:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - run: pip install -r requirements.txt
+
+      # 取得と絞り込みだけ。Firestoreに触れないので、いつ走らせても副作用が無い
+      - name: 構造を確認する
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'inspect'
+        run: python scripts/market_cache.py --inspect
+        env:
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
+
+      # ── 時間外気配 ────────────────────────────────
+      - name: 気配を取り込む
+        if: |
+          github.event.schedule == '*/20 8-23 * * 1-5'
+          || github.event.schedule == '*/20 0-1 * * 2-6'
+          || (github.event_name == 'workflow_dispatch' && startsWith(inputs.mode, 'quotes'))
+        run: python scripts/market_cache.py quotes
+        env:
+          DRY_RUN: ${{ inputs.mode == 'quotes-dry-run' && '1' || '0' }}
+          FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+
+      # ── ニュース・決算・ロゴ ──────────────────────
+      - name: ニュースと決算を取り込む
+        if: |
+          github.event.schedule == '5 * * * *'
+          || (github.event_name == 'workflow_dispatch' && startsWith(inputs.mode, 'symbols'))
+        run: python scripts/market_cache.py symbols
+        env:
+          DRY_RUN: ${{ inputs.mode == 'symbols-dry-run' && '1' || '0' }}
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}

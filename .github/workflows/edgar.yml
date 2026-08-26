@@ -1,0 +1,65 @@
+name: EDGAR
+
+on:
+  schedule:
+    # 米国の提出が集まる時間帯を15分おきに見る。**ETはUTC-4（夏）/ UTC-5（冬）で
+    # GitHubのcronは夏時間を切り替えられない**ので、両方を覆う広さで置いてある。
+    #
+    #   UTC 10:00–23:59 月〜金 → ET 06:00–19:59（夏）/ 05:00–18:59（冬）
+    #   UTC 00:00–01:59 火〜土 → ET 20:00–21:59（夏）/ 19:00–20:59（冬）
+    #
+    # **曜日はUTC基準。** 日付をまたぐ後半だけ 2-6（火〜土）になる。
+    # ここを 1-5 に揃えると、金曜の引け後ぶんが土曜扱いで落ちる。
+    - cron: '*/15 10-23 * * 1-5'
+    - cron: '*/15 0-1 * * 2-6'
+
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: '動かし方'
+        required: true
+        default: inspect
+        type: choice
+        options: [inspect, dry-run, send]
+
+# **定刻に動かないことを前提にしてある。** GitHub Actionsのスケジュールは
+# 共有ランナーのキュー待ちで遅れる（このリポジトリでは4時間26分遅れた実績がある）。
+# getcurrentは2ページで8-Kの直近3時間ぶんを返すので、1時間程度の遅れでは
+# 取りこぼさない。**遅れても壊れないのが、この間隔にしてある理由。**
+concurrency:
+  group: edgar
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - run: pip install -r requirements.txt
+
+      # EDGARを読んで解釈するだけ。Firestoreにも要約にも触れないので副作用が無い。
+      # 様式を疑うとき（フォーム名が変わった・Item番号が読めない）はこれで確かめる
+      - name: 構造を確認する
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'inspect'
+        run: python scripts/edgar.py --inspect
+
+      # 要約までは走らせるが、Firestoreには書かない。費用の見当を付けるのに使う
+      - name: 取り込む（書き込まない）
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'dry-run'
+        run: python scripts/edgar.py
+        env:
+          DRY_RUN: '1'
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+
+      - name: 取り込んでFirestoreへ書く
+        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'send')
+        run: python scripts/edgar.py
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
