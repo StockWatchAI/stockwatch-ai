@@ -479,29 +479,42 @@ def primary_document(entry):
     return f"{base}/{name}"
 
 
+_INDEX_HREF = re.compile(r'href="[^"]*/([^"/]+\.(?:htm|html|txt))"', re.I)
+
+
 def exhibit_urls(entry, limit=3):
     """EX-99系の添付。
 
     **8-Kの中身は本体ではなく添付にあることが多い。** Item 2.02（業績発表）の
     本体は「詳細はExhibit 99.1のとおり」で終わっていて、実測したAAPLの8-Kでは
     本体がタグを落として4KB、中身のあるEX-99.1が173KBだった。
-    一覧が揃っていない提出では空になるが、そのときは本体だけで作る。
+
+    **一覧は `-index.htm` から引く。`index.json` は使えない。** 提出直後の
+    `index.json` は中身が揃っておらず、目次と提出物まるごとの `.txt` しか
+    返さない（ZMの決算8-Kで実際に空を返し、**本体だけを要約して
+    「決算を発表しました。数値は別紙99.1にあります」で終わる**という、
+    まさに避けたかった結果になった）。同じ提出物でも `-index.htm` のほうには
+    `zm-20260731ex991.htm` が載っている。
+
+    提出物まるごとの `.txt` を読めば確実だが、こちらは実測で472KBあり、
+    添付1つのために毎回落とすには重い。
     """
     base = ARCHIVES.format(cik=entry["cik"], accn=entry["accessionNo"].replace("-", ""))
+    # フィードが持っている目次のURLを優先する。無ければ組み立てる
+    index_url = entry.get("indexUrl") or f"{base}/{entry['accessionNo']}-index.htm"
+
     try:
-        items = fetch(f"{base}/index.json").json().get("directory", {}).get("item", [])
-    except Exception:
+        markup = fetch(index_url).text
+    except Exception as e:
+        print(f"    目次を取れなかった: {e}")
         return []
 
     found = []
-    for it in items:
-        name = it.get("name", "")
+    for name in _INDEX_HREF.findall(markup):
         low = name.lower()
-        if not low.endswith((".htm", ".html", ".txt")):
-            continue
-        if "ex99" in low or "ex-99" in low or low.startswith("ex99"):
-            found.append(f"{base}/{name}")
-    return found[:limit]
+        if ("ex99" in low or "ex-99" in low) and name not in found:
+            found.append(name)
+    return [f"{base}/{n}" for n in found[:limit]]
 
 
 def read_document(url):
