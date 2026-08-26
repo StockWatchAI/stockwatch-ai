@@ -74,14 +74,22 @@
         <h2>4. Third-Party Services</h2>
         <p>The app uses the third-party services listed below. Please also review each service's own privacy policy.</p>
         <ul>
-            <li><strong>Yahoo Finance</strong> (share prices, price history, dividends and index levels for all supported markets; symbol search): <a href="https://legal.yahoo.com/us/en/yahoo/privacy/index.html" target="_blank">Yahoo Privacy Policy</a></li>
-            <li><strong>Finnhub</strong> (share prices, news, earnings dates and company logos for US stocks): <a href="https://finnhub.io/terms-of-service" target="_blank">Finnhub Terms of Service</a></li>
-            <li><strong>Google News</strong> (news for markets outside the United States): <a href="https://policies.google.com/privacy" target="_blank">Google Privacy Policy</a></li>
+            <li><strong>Yahoo Finance</strong> (share prices, price history, dividends, index levels and extended-hours quotes for all supported markets; symbol search): <a href="https://legal.yahoo.com/us/en/yahoo/privacy/index.html" target="_blank">Yahoo Privacy Policy</a></li>
+            <li><strong>Google News</strong> (news articles): <a href="https://policies.google.com/privacy" target="_blank">Google Privacy Policy</a></li>
             <li><strong>OpenAI</strong> (generating AI summaries): <a href="https://openai.com/policies/privacy-policy" target="_blank">OpenAI Privacy Policy</a></li>
-            <li><strong>Firebase (Google)</strong> (anonymous authentication, storing your watchlist and settings, delivering push notifications): <a href="https://policies.google.com/privacy" target="_blank">Google Privacy Policy</a></li>
-            <li><strong>Financial Modeling Prep</strong> (extended-hours quotes for US stocks): <a href="https://site.financialmodelingprep.com/privacy-policy" target="_blank">FMP Privacy Policy</a></li>
+            <li><strong>Firebase (Google)</strong> (anonymous sign-in, storing your watchlist and settings, delivering push notifications, and reading content we prepare): <a href="https://policies.google.com/privacy" target="_blank">Google Privacy Policy</a></li>
         </ul>
         <p>When an AI summary is generated, the price figures and the headlines and summary text of the news articles are sent to the OpenAI API. The ticker symbol you are viewing is sent to the price sources. The news sources receive the ticker symbol along with the company name and the language being searched. No information that directly identifies you is sent to any of these services.</p>
+
+        <h3>Services the app no longer contacts directly</h3>
+        <p>From version 2.0, news, earnings dates, company logos and extended-hours quotes for US stocks are fetched by our server and stored in Firebase; the app only reads them. Your device no longer communicates directly with:</p>
+        <ul>
+            <li><strong>Finnhub</strong> (news, earnings dates and company logos for US stocks) — fetched only by our server</li>
+            <li><strong>Financial Modeling Prep</strong> — no longer used</li>
+        </ul>
+        <p>These services can no longer see which stocks you are viewing. Our server fetches data using the combined list of stocks followed by all users, and does not send information about who follows which stock.</p>
+
+        <p>Filings that US companies submit to the U.S. Securities and Exchange Commission (SEC) are retrieved from the SEC's EDGAR system by our server, summarized, and stored in Firebase. This happens on a schedule, independently of anything you do in the app, so the SEC does not receive information about your activity.</p>
 
         <h2>5. Data Storage</h2>
         <p>Your watchlist and AI settings are stored on your device (in UserDefaults).</p>
