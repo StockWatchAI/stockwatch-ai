@@ -670,32 +670,45 @@ Write plainly, for someone who does not read filings."""
 
 # **出力の形をスキーマで固定する。** プロンプトで頼むだけだと、たまに前置きが
 # 付いて `json.loads` が落ちる。落ちた1件のために実行ごと止めたくない
-OUTPUT_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "headline_en": {"type": "string"},
-        "headline_ja": {"type": "string"},
-        "summary_en": {"type": "string"},
-        "summary_ja": {"type": "string"},
-        "impact": {"type": "string", "enum": ["critical", "high", "medium", "low"]},
-        "impact_reason_en": {"type": "string"},
-        "impact_reason_ja": {"type": "string"},
-    },
-    "required": [
-        "headline_en", "headline_ja", "summary_en", "summary_ja",
-        "impact", "impact_reason_en", "impact_reason_ja",
-    ],
-    "additionalProperties": False,
+# **アプリの表示言語ぶんだけ作る。** AIの出力言語は15あるが、あれは利用者が
+# 個別に選ぶもので、全員ぶんを先に作ると15倍の費用がかかるうえほとんど読まれない。
+# 表示言語なら必ず誰かが読む。
+#
+# ver2.1 で繁体字と韓国語を足した。**台湾・香港・韓国の利用者にとっては
+# ここが本体**で、英語のままでは開示要約が届かない。
+LANGUAGES = ("en", "ja", "zh", "ko")
+
+# プロンプトに書く言語名と、Firestoreに入れるキー。
+# **キーはアプリの `EDGARFilingsViewModel.text` が引く名前と揃える**
+LANGUAGE_NAMES = {
+    "en": "English",
+    "ja": "Japanese",
+    "zh": "Traditional Chinese (Taiwan usage)",
+    "ko": "Korean",
 }
 
-# **英語と日本語だけ作る。** アプリの表示言語がこの2つで、AIの出力言語15言語は
-# 利用者ごとに違う。全員ぶんを先に作ると15倍の費用がかかるうえ、
-# ほとんど読まれない。読む人がいる2言語を用意し、他はアプリ側で英語に倒す
-LANGUAGES = ("en", "ja")
+
+def _build_schema():
+    """言語を足したらここが自動で広がる。**手で書き並べない**（足し忘れる）"""
+    props = {"impact": {"type": "string", "enum": ["critical", "high", "medium", "low"]}}
+    for field in ("headline", "summary", "impact_reason"):
+        for lang in LANGUAGES:
+            props[f"{field}_{lang}"] = {"type": "string"}
+    return {
+        "type": "object",
+        "properties": props,
+        "required": list(props),
+        "additionalProperties": False,
+    }
+
+
+OUTPUT_SCHEMA = _build_schema()
+
 
 
 def build_prompt(entry, impact, body):
     items = ", ".join(entry["items"]) if entry["items"] else "n/a"
+    language_list = "\n".join(f"  {lang} = {LANGUAGE_NAMES[lang]}" for lang in LANGUAGES)
     return f"""Summarize this SEC filing.
 
 Form type: {entry['form']}
@@ -710,14 +723,18 @@ Filing text:
 {body}
 \"\"\"
 
-Produce:
-- headline_en / headline_ja: at most 40 characters, stating what happened.
-- summary_en / summary_ja: 3 to 5 sentences explaining what happened in plain language.
-- impact: critical, high, medium or low. Start from the preliminary importance and
-  change it only if the text clearly warrants it.
-- impact_reason_en / impact_reason_ja: one sentence on why that importance.
+Produce, for each language suffix below:
+{language_list}
 
-The Japanese fields must be natural Japanese, not a literal translation."""
+- headline_<lang>: at most 40 characters, stating what happened.
+- summary_<lang>: 3 to 5 sentences explaining what happened in plain language.
+- impact_reason_<lang>: one sentence on why that importance.
+- impact: critical, high, medium or low (one value, not per language). Start from the
+  preliminary importance and change it only if the text clearly warrants it.
+
+Each language must read naturally to a native speaker of that language — write it,
+do not translate it word for word. Use the financial vocabulary that retail investors
+in that market actually use."""
 
 
 def summarize(client, entry, impact, body):
