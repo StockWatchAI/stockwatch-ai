@@ -743,7 +743,10 @@ def summarize(client, entry, impact, body):
     try:
         res = client.messages.create(
             model=model,
-            max_tokens=2000,
+            # **4言語ぶんの余裕を持たせる。** 見出し・要約・理由を en/ja/zh/ko で
+            # 書かせるので、2言語のときの倍近く出る。途中で切れるとJSONが壊れ、
+            # その提出物は**無言で捨てられる**（例外にならないので気付けない）
+            max_tokens=6000,
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": build_prompt(entry, impact, body)}],
             output_config={"format": {"type": "json_schema", "schema": OUTPUT_SCHEMA}},
