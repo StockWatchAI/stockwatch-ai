@@ -19,7 +19,7 @@
 
 ## 書き込み先
 
-    quotes/{SYMBOL}     regularClose / extendedPrice / session / asOf
+    quotes/{SYMBOL}     regularClose / extendedPrice / session / asOf（Yahoo）
     symbols/{SYMBOL}    news[] / earnings / lastEarnings / logo
     config/newsSources  通す配信元の一覧（アプリも読む）
 
@@ -54,7 +54,6 @@ UTC = timezone.utc
 TIMEOUT = 20
 
 FINNHUB = "https://finnhub.io/api/v1"
-FMP = "https://financialmodelingprep.com/stable"
 
 QUOTES_COLLECTION = "quotes"
 SYMBOLS_COLLECTION = "symbols"
@@ -72,11 +71,10 @@ _last_call = 0.0
 
 
 # 実行中に出た失敗の内訳。**1銘柄ずつ印字すると本当の異常が埋もれる。**
-# FMPの無料プランは対象外の銘柄に402を返すので、47銘柄なら毎回30行以上出る
 _failures = {}
 
 
-def call(url, params, label):
+def call(url, params, label, headers=None):
     """外部APIを1回叩く。**失敗はNoneに畳む**（1銘柄で全体を止めない）"""
     global _last_call
     gap = API_INTERVAL - (time.monotonic() - _last_call)
@@ -84,7 +82,7 @@ def call(url, params, label):
         time.sleep(gap)
     _last_call = time.monotonic()
     try:
-        res = requests.get(url, params=params, timeout=TIMEOUT)
+        res = requests.get(url, params=params, headers=headers, timeout=TIMEOUT)
         res.raise_for_status()
         return res.json()
     except requests.HTTPError as e:
@@ -104,9 +102,7 @@ def report_failures():
     """失敗の内訳をまとめて1回だけ出す"""
     for code, labels in sorted(_failures.items(), key=lambda x: str(x[0])):
         note = ""
-        if code == 402:
-            note = "（FMPの無料プランが扱わない銘柄。課金プランでのみ取得可）"
-        elif code == 429:
+        if code == 429:
             note = "（レート制限。API_INTERVAL を延ばす）"
         head = ", ".join(l.split()[0] for l in labels[:12])
         more = f" ほか{len(labels) - 12}件" if len(labels) > 12 else ""
@@ -136,61 +132,88 @@ def session_now(now=None):
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 時間外気配（FMP）
+# 時間外気配（Yahoo Finance）
+#
+# **FMPをやめてYahooにした。** FMPの無料プランは大半の銘柄を「有料シンボル」
+# として402で弾く。実測（2026-08-27）で**47銘柄中32銘柄が402**で、
+# SNDK・ARM・AMAT・IONQ などの気配が一度も表示できていなかった。
+#
+#     FMP     15 / 47 銘柄
+#     Yahoo   47 / 47 銘柄（取れなかった銘柄はゼロ）
+#
+# NVDAで突き合わせるとYahoo 218.87 / FMP 218.87〜219.48 でほぼ一致する。
+#
+# 分足に `includePrePost=true` を付けると、通常取引の前後のバーも返る。
+# `meta.currentTradingPeriod.regular` が当日の通常取引の開始・終了なので、
+# その外側のバーが時間外にあたる。
+#
+# **鍵が要らない。** Yahooは株価・チャート・配当・52週レンジの取得元でもあるので、
+# 利用者から見た第三者サービスが1つ減る（プライバシーポリシーの記載も変わる）。
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-def fmp_quote(symbol, key):
-    data = call(f"{FMP}/quote", {"symbol": symbol, "apikey": key}, f"{symbol} の株価")
-    if not isinstance(data, list) or not data:
-        return None
-    return data[0].get("price")
+YAHOO_CHART = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
 
 
-def fmp_aftermarket(symbol, key):
-    """**`price` は返らない。** `bidPrice` / `askPrice` から仲値を作る。
+def yahoo_extended(symbol):
+    """`(通常取引の終値, 時間外の値, その時刻)` を返す。取れなければ `(None, None, None)`
 
-    `timestamp` は**ミリ秒**（秒として扱うと1970年になる）。返ってくる時刻は
-    取得時刻ではなく**市場時刻**なので、そのまま表示に使う。
+    **全項目を欠損に強く読む。** 非公式なので、項目が欠けても落とさない。
     """
-    data = call(f"{FMP}/aftermarket-quote", {"symbol": symbol, "apikey": key},
-                f"{symbol} の時間外気配")
-    if not isinstance(data, list) or not data:
-        return None, None
-    row = data[0]
-    bid, ask = row.get("bidPrice"), row.get("askPrice")
-    if bid and ask and bid > 0 and ask > 0:
-        price = (bid + ask) / 2
-    elif bid and bid > 0:
-        price = bid
-    elif ask and ask > 0:
-        price = ask
-    else:
-        return None, None
+    data = call(
+        YAHOO_CHART.format(symbol=symbol),
+        {"interval": "1m", "range": "1d", "includePrePost": "true"},
+        f"{symbol} の気配",
+        headers={"User-Agent": "Mozilla/5.0"},
+    )
+    try:
+        result = (data.get("chart", {}).get("result") or [None])[0]
+    except AttributeError:
+        return None, None, None
+    if not result:
+        return None, None, None
 
-    stamp = row.get("timestamp")
-    as_of = datetime.fromtimestamp(stamp / 1000, UTC) if stamp else datetime.now(UTC)
-    return price, as_of
+    meta = result.get("meta") or {}
+    regular_close = meta.get("regularMarketPrice")
+    if regular_close is None:
+        return None, None, None
+
+    period = (meta.get("currentTradingPeriod") or {}).get("regular") or {}
+    start, end = period.get("start"), period.get("end")
+
+    stamps = result.get("timestamp") or []
+    closes = (((result.get("indicators") or {}).get("quote") or [{}])[0] or {}).get("close") or []
+    bars = [(t, c) for t, c in zip(stamps, closes) if c is not None]
+    if not bars or start is None or end is None:
+        return regular_close, None, None
+
+    # **通常取引の外側のバーだけを見る。** 引け後があればそちら、
+    # 無ければ寄り前（その日の通常取引が始まる前）
+    after = [b for b in bars if b[0] >= end]
+    before = [b for b in bars if b[0] < start]
+    picked = after[-1] if after else (before[-1] if before else None)
+    if not picked:
+        return regular_close, None, None
+
+    return regular_close, picked[1], datetime.fromtimestamp(picked[0], UTC)
 
 
-def build_quote(symbol, key, session):
-    regular = fmp_quote(symbol, key)
+def build_quote(symbol, session):
+    regular, extended, as_of = yahoo_extended(symbol)
     if regular is None:
         return None
 
-    extended, as_of = None, datetime.now(UTC)
-    # ザラ場中は時間外の気配が存在しない。閉場中は「直近セッションの最終気配」を出す
-    # （日本の日中は米国市場が丸ごと閉まっているので、ここをnilにすると終日空になる）
-    if session != "regular":
-        extended, stamp = fmp_aftermarket(symbol, key)
-        if stamp:
-            as_of = stamp
+    # ザラ場中は時間外の気配が存在しない（現在値は株価カード側が出す）。
+    # 閉場中は「直近セッションの最終気配」を出す
+    # （日本の日中は米国市場が丸ごと閉まっているので、ここを空にすると終日空になる）
+    if session == "regular":
+        extended, as_of = None, None
 
     return {
         "symbol": symbol,
         "regularClose": regular,
         "extendedPrice": extended,
         "session": session,
-        "asOf": as_of,
+        "asOf": as_of or datetime.now(UTC),
         "updatedAt": datetime.now(UTC),
     }
 
@@ -401,18 +424,14 @@ def load_allowed_sources(db):
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 def run_quotes(db, tickers):
-    key = os.environ.get("FMP_API_KEY", "").strip()
-    if not key:
-        print("FMP_API_KEY が無いため中止")
-        return
-
+    # **鍵は要らない。** Yahooは認証なしで引ける
     session = session_now()
     print(f"米国市場: {session} / 対象 {len(tickers)} 銘柄")
 
     dry_run = os.environ.get("DRY_RUN") == "1"
     written = 0
     for symbol in tickers:
-        quote = build_quote(symbol, key, session)
+        quote = build_quote(symbol, session)
         if not quote:
             continue
         ext = quote["extendedPrice"]
@@ -450,9 +469,8 @@ def inspect():
     print(f"いまの米国市場: {session_now()}\n")
 
     finnhub_key = os.environ.get("FINNHUB_API_KEY", "").strip()
-    fmp_key = os.environ.get("FMP_API_KEY", "").strip()
     print(f"FINNHUB_API_KEY: {'あり' if finnhub_key else 'なし'}")
-    print(f"FMP_API_KEY:     {'あり' if fmp_key else 'なし'}\n")
+    print("気配はYahooから取るので鍵は不要\n")
 
     print("=== 配信元の絞り込み（表そのものの確認） ===")
     samples = ["Reuters", "reuters.com", "Bloomberg", "PR Newswire", "GlobeNewswire",
@@ -470,9 +488,13 @@ def inspect():
         for n in news[:8]:
             print(f"    {n['source']:22} {n['headline'][:60]}")
 
-    if fmp_key:
-        print("\n=== AAPL の気配 ===")
-        print(f"  {build_quote('AAPL', fmp_key, session_now())}")
+    print("\n=== 気配（Yahoo・鍵不要）===")
+    for sym in ("AAPL", "NVDA", "SNDK"):
+        q = build_quote(sym, session_now())
+        if q:
+            print(f"  {sym:6} 終値={q['regularClose']} 時間外={q['extendedPrice']} 時刻={q['asOf']}")
+        else:
+            print(f"  {sym:6} 取れず")
 
     return 0
 
