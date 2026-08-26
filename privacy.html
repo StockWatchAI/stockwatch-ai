@@ -69,14 +69,22 @@
         <h2>4. 第三者サービスとの連携</h2>
         <p>本アプリは、以下の第三者サービスを利用しています。各サービスのプライバシーポリシーもあわせてご確認ください。</p>
         <ul>
-            <li><strong>Yahoo Finance</strong>（全対応市場の株価・チャート・配当・指数の取得、銘柄検索）：<a href="https://legal.yahoo.com/us/en/yahoo/privacy/index.html" target="_blank">Yahoo Privacy Policy</a></li>
-            <li><strong>Finnhub</strong>（米国株の株価・ニュース・決算・企業ロゴの取得）：<a href="https://finnhub.io/terms-of-service" target="_blank">Finnhub Terms of Service</a></li>
-            <li><strong>Googleニュース</strong>（米国以外の市場のニュースの取得）：<a href="https://policies.google.com/privacy" target="_blank">Google Privacy Policy</a></li>
+            <li><strong>Yahoo Finance</strong>（全対応市場の株価・チャート・配当・指数の取得、時間外気配、銘柄検索）：<a href="https://legal.yahoo.com/us/en/yahoo/privacy/index.html" target="_blank">Yahoo Privacy Policy</a></li>
+            <li><strong>Googleニュース</strong>（ニュースの取得）：<a href="https://policies.google.com/privacy" target="_blank">Google Privacy Policy</a></li>
             <li><strong>OpenAI</strong>（AI要約の生成）：<a href="https://openai.com/policies/privacy-policy" target="_blank">OpenAI Privacy Policy</a></li>
-            <li><strong>Firebase（Google）</strong>（匿名認証、ウォッチリスト等の保存、プッシュ通知の配信）：<a href="https://policies.google.com/privacy" target="_blank">Google Privacy Policy</a></li>
-            <li><strong>Financial Modeling Prep</strong>（米国株の時間外気配の取得）：<a href="https://site.financialmodelingprep.com/privacy-policy" target="_blank">FMP Privacy Policy</a></li>
+            <li><strong>Firebase（Google）</strong>（匿名認証、ウォッチリスト等の保存、プッシュ通知の配信、当社が用意した情報の読み取り）：<a href="https://policies.google.com/privacy" target="_blank">Google Privacy Policy</a></li>
         </ul>
         <p>AIによる要約を生成する際、株価の数値、ニュースの見出しおよび要約テキストがOpenAIのAPIに送信されます。株価の取得先には、お客様が閲覧している銘柄コードが送信されます。ニュースの取得先には、銘柄コードに加えて会社名と検索する言語が送信されます。これらのサービスに、お客様を直接特定する情報が送信されることはありません。</p>
+
+        <h3>アプリから直接送信しなくなったサービス</h3>
+        <p>バージョン2.0より、米国株のニュース・決算・企業ロゴ・時間外気配は、当社のサーバー側で取得してFirebaseに保存したものをアプリが読み取る方式に変更しました。これにより、以下のサービスへお客様の端末から直接通信することはなくなりました。</p>
+        <ul>
+            <li><strong>Finnhub</strong>（米国株のニュース・決算・企業ロゴ）— 当社サーバーからのみ取得します</li>
+            <li><strong>Financial Modeling Prep</strong> — 利用を終了しました</li>
+        </ul>
+        <p>これらのサービスは、お客様が閲覧している銘柄を知ることができなくなりました。当社サーバーは、全利用者のウォッチリストを合算した銘柄の一覧をもとに取得しており、どの銘柄を誰が見ているかは送信していません。</p>
+
+        <p>米国企業がアメリカ合衆国証券取引委員会（SEC）に提出した開示書類は、当社サーバーがSECのEDGARシステムから取得し、要約したうえでFirebaseに保存します。この取得はお客様の操作とは無関係に定期的に行われるため、SECにお客様の閲覧状況が送信されることはありません。</p>
 
         <h2>5. データの保存</h2>
         <p>ウォッチリストやAI設定は、お客様のデバイス内（UserDefaults）に保存されます。</p>
