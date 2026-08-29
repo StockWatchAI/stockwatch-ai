@@ -314,9 +314,9 @@ MODEL_TRANSLATE = "claude-haiku-4-5"
 
 # 出力課金は入力の5倍高い。**上限を切らないと無駄に長い出力が返る**
 MAX_TOKENS_SELECT = 2000
-MAX_TOKENS_SUMMARY = 6000
+MAX_TOKENS_SUMMARY = 8000
 # 繁體中文・韓国語は同じ内容でも日本語よりトークンが増えやすいので広めに取る
-MAX_TOKENS_TRANSLATE = 5000
+MAX_TOKENS_TRANSLATE = 6000
 
 # 実行の終わりに概算を出すためだけの表（$ / 100万トークン）。
 # **課金の正はコンソール側。** ここは桁を見誤らないための目安
@@ -953,10 +953,21 @@ def _usage(totals, model, response):
     entry["cache_read"] += getattr(usage, "cache_read_input_tokens", 0) or 0
 
 
-def _call(client, totals, *, model, system, prompt, max_tokens, schema):
+def _call(client, totals, *, model, system, prompt, max_tokens, schema, _retry=True):
     """1コール。**出力の形をスキーマで固定する**（前置きが付いて json.loads が落ちるのを防ぐ）。
 
     **失敗はNoneに畳む。** 1コールのために実行ごと止めない。
+
+    ⚠️ **思考を切ってある（`thinking: disabled`）。**
+    Sonnet 5 は `thinking` を省略すると**アダプティブ思考が既定で動く**。
+    思考のぶんも出力トークンとして数えられるので、`max_tokens` を要約の分量で
+    見積もっていると**途中で切れてJSONが壊れる**。実測（2026-08-30）で
+    出力が6,000（＝上限ぴったり）に張り付き、
+    `Unterminated string starting at: line 1 column 1336` で実行ごと落ちた。
+    ここは要約と翻訳の整形しかしていないので、思考は要らない。
+
+    `edgar.py` が同じ `max_tokens=6000` で通っているのは Sonnet 4.6 だから。
+    **4.6 は省略時に思考しない。モデルを上げるときはここを確かめること。**
 
     システムプロンプトは毎回同じなので `cache_control` を付けてある。
     ただし**いまの長さ（1000トークン未満）ではキャッシュに載らないことが多い**
@@ -967,6 +978,7 @@ def _call(client, totals, *, model, system, prompt, max_tokens, schema):
         response = client.messages.create(
             model=model,
             max_tokens=max_tokens,
+            thinking={"type": "disabled"},
             system=[{
                 "type": "text",
                 "text": system,
@@ -980,15 +992,29 @@ def _call(client, totals, *, model, system, prompt, max_tokens, schema):
         return None
 
     _usage(totals, model, response)
+
+    # **切れたことを黙って通さない。** 切れた出力は必ずJSONとして壊れるので、
+    # 下の except でも捕まるが、原因が「上限に当たった」だと分からない
+    truncated = getattr(response, "stop_reason", None) == "max_tokens"
     text = next((b.text for b in response.content if getattr(b, "type", None) == "text"), None)
-    if not text:
+
+    if not truncated and text:
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError as e:
+            print(f"    {model} のJSONを読めなかった: {e}")
+    elif truncated:
+        print(f"    {model} が max_tokens({max_tokens}) に達して切れた")
+    else:
         print(f"    {model} が本文を返さなかった")
-        return None
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError as e:
-        print(f"    {model} のJSONを読めなかった: {e}")
-        return None
+
+    # **1回だけ広げてやり直す。** ここで諦めると、1コールの失敗で
+    # その日のまとめが丸ごと出なくなる（実測で実際に起きた）
+    if _retry:
+        print(f"    上限を {max_tokens * 2} に広げてやり直す")
+        return _call(client, totals, model=model, system=system, prompt=prompt,
+                     max_tokens=max_tokens * 2, schema=schema, _retry=False)
+    return None
 
 
 SELECT_SCHEMA = {
