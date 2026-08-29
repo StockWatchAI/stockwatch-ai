@@ -1,0 +1,1287 @@
+#!/usr/bin/env python3
+"""AI・半導体セクターのニュースを集めて要約し、Firestoreに1日1件置く。
+
+    python3 scripts/sector_digest.py --inspect   # 収集と前処理だけ（Firestore・Claudeに触れない）
+    DRY_RUN=1 python3 scripts/sector_digest.py   # 要約まで走らせて、書き込まない
+    python3 scripts/sector_digest.py             # 収集→選別→要約→翻訳→Firestoreへ書く
+
+アプリ側は `SectorDigest.swift` / `SectorNewsView.swift` が `sector_digest/{YYYY-MM-DD}`
+を読み、「セクター」タブに出す。**銘柄に紐付かない唯一の面**で、ウォッチリストが
+0件の利用者にも同じものが出る。
+
+**全利用者で同じ1ドキュメントを読む。** 内容が利用者ごとに変わらないので、APIの費用が
+利用者数に比例しない。**無料で出せる根拠はここ。** 「利用者ごとにパーソナライズ」を
+足した瞬間に費用が線形に増えるので、当面やらない。
+
+**集めるのは英語の記事だけ。** 入力の言語を揃えないと選別も要約も安定しない。
+判定は `is_english`（見出し・本文・配信元を見る）。要約は日本語・英語・繁體中文・
+韓国語の4言語ぶん作るので、**入力が英語であることと出力の言語は別の話。**
+
+**通知は送らない。** Firestoreへ書くところまで。
+
+---
+
+## 費用を抑える作り（設計メモ ai-semi-news-spec.md のR1〜R9）
+
+- **R1 1件ずつ叩かない。** 選別は40件を1コール、要約は掲載ぶんを1コールに畳む。
+  1件1コールにすると、システムプロンプトを件数ぶん払うことになる
+- **R2 選別と要約でモデルを分ける。** 載せる/載せないの判断はHaikuで足りる
+- **R3 多言語は「翻訳」であって「再要約」ではない。** 元記事をもう一度読ませない。
+  出来上がった短い要約（1件250トークン程度）を入力にする
+- **R6 全文を投げない。** タイトル＋RSSのdescription（300字まで）で足りる
+- **R7 同じ記事を二度要約しない。** URLのSHA-256を `processed_urls` に残す
+- **R9 max_tokens を必ず指定する。** 出力課金は入力の5倍高い
+
+### 設計メモから変えたところ
+
+**1. 要約は日本語と英語を同時に書かせ、翻訳は英語から行う。**
+メモは「日本語要約 → 各言語へ翻訳」だったが、それだと英語で使っている利用者に
+`日本語 → 英語` の往復を通した文が出る。元記事が英語なのに一度日本語を経由するのは
+情報が痩せるだけなので、Sonnetの1コールで ja と en を同時に書かせる（入力は1回ぶん、
+増えるのは出力だけ）。繁體中文・韓国語はその英語から訳す。
+
+**`en` はアプリの動作にも要る。** アプリは訳の欠けた言語を**英語に倒す**作りで、
+日本語には倒さない（韓国語の利用者に日本語が出るのは事故に見えるため）。
+`en` が無い記事は**行ごと落ちる**。
+
+**2. Batch API を使っていない。** メモのR4（50%オフ）は、前夜に投入して朝に取り出す
+2ジョブ構成と、その間の状態の持ち回りが要る。いまの規模だと月$2ほどの節約のために
+運用が1つ増えるので、**費用が実際に問題になってから**にする。切り替えるときは
+`summarize` / `translate` の呼び出しを `client.messages.batches.create` に寄せる。
+
+**3. 動画（`videos`）は入れていない。** メモのP5。YouTube Data APIの鍵と字幕の取得が
+別に要る。アプリ側は `videos` を読める状態にしてあるので、後から足せる。
+
+---
+
+## 実測で分かったこと（2026-08-30）
+
+**IRのRSSは会社によって出していない・弾かれる。** 実際に叩いて確かめた結果:
+
+    200 NVIDIA    https://nvidianews.nvidia.com/releases.xml      20件
+    200 AMD       https://ir.amd.com/rss/news-releases.xml        10件
+    200 SK hynix  https://news.skhynix.com/feed/                  10件
+    200 Intel     https://newsroom.intel.com/feed                 10件
+    403 TSMC      www.tsmc.com / pr.tsmc.com / investor.tsmc.com  （botを弾く）
+    404 ASML      www.asml.com/rss/... /en/news/press-releases/rss
+    403 Micron    investors.micron.com/rss/news-releases.xml
+    000 Broadcom  investors.broadcom.com/rss/news-releases.xml    （接続できず）
+
+**取れない会社はGoogleニュースRSS側で拾う。** TSMC・ASML・Broadcomは
+`QUERIES` に企業名で入れてある。**IRが取れないことをバグと診断しないこと。**
+
+**Googleニュースの `<title>` は末尾に ` - 配信元` が付く。** そのまま要約に渡すと
+見出しに配信元が混ざるので落とす。
+
+**Hacker Newsは `points > 100` でも広告記事が混ざる。** Algoliaは本文を見ないので、
+最終的な取捨は選別（Haiku）に任せる。
+
+**Hacker Newsは30時間・100点では0件で返る。** 実測（2026-08-30）で5つの問い合わせ
+すべてが0件だった。HNの点数は投稿から丸一日かけて伸びるので、**投稿時刻で30時間に
+切ると、いま100点を超えたばかりの記事が入らない**。72時間・50点にしてある。
+重複はURLで落ちるので、窓を広げても同じ記事を二度要約することはない。
+
+## 素直に新しい順で40件取ると、中身が「株価予想」で埋まる
+
+実測（2026-08-30）で上位に並んだのは次のようなものだった。
+
+    TSMC Stock Price Prediction: Can TSM Hit N...   （TradingKey）
+    Why I'm Still Holding Nvidia (NVDA) Despite Its Sky-High P/E Ratio   （Motley Fool）
+    Kevin Durant Is About To Make More Money From Nvidia Than His NBA Salary
+
+さらに**同じ発表が5〜8件に増殖する**（Sony/WarnerのAnthropic提訴が、配信元違いで
+8件並んだ）。増殖したぶんが枠を食うので、選別に渡る40件の中身が薄くなる。
+**IRの50件も1件も残らなかった**が、こちらは理由が違う。押し出されたのではなく、
+**いちばん新しい発表が39.8時間前**で、30時間の窓の外だった。IRの発表は数日おきなので、
+ニュースと同じ窓で切ると常に0件になる（`LOOKBACK_BY_ORIGIN` で96時間にしてある）。
+
+そこで、LLMに渡す前に**機械的な点数**を付けて並べ替える（`score`）。
+
+- IRのフィード ＋100 … 会社が自分で出した一次情報。設計メモが優先すると決めたもの
+- 通信社・主要紙 ＋50 … `news_sources.DEFAULT_ALLOWED` に当たるもの。
+  **`is_undecidable`（ラテン文字を含まない配信元）は0点にする。** あれは
+  「判断できないので通す」ための判定で、点数に使うと現地語の媒体が全部主要紙と
+  同じ点になる（実測でスポーツ紙の芸能記事が上位に来た）
+- `news_sources.KNOWN_EXCLUDED`（Motley Fool・Zacks・Benzinga等）は**落とす**
+- 「株価予想」「買うべきか」系の見出し（`JUNK_TITLE`）は**落とす**
+- 見出しが似ているものは1つに畳む（`dedupe_similar`・語の重なりで見る）
+
+**ホワイトリストで「通す」判定はしない。** `news_sources` は前方一致で数えるだけの
+表なので、これだけで絞ると表に無い良い記事（The Information、SemiAnalysis など）が
+消える。**点数を上げるのに使い、落とすのは除外リストと見出しの型だけ**にしてある。
+"""
+
+import argparse
+import hashlib
+import html
+import json
+import os
+import re
+import sys
+import time
+import xml.etree.ElementTree as ET
+from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
+from urllib.parse import quote
+
+import requests
+
+# 同じ `scripts/` にある表を使い回す。**通すかどうかの判定には使わず、点数に使う**
+# （下のdocstringの「素直に新しい順で40件取ると」を参照）
+import news_sources
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 設定
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+USER_AGENT = "StockWatchAI/2.3 (shuichi@tinkermode.com)"
+TIMEOUT = 30
+# 外部への連続アクセスの間隔。相手を選ばず一律で置く
+MIN_INTERVAL = 0.3
+
+UTC = timezone.utc
+# **ドキュメントIDは日本時間の日付。** 朝の配信（5:30 JST）の直前に走るので、
+# UTCの日付で書くと前日ぶんとして積まれる
+JST = timezone(timedelta(hours=9))
+
+COLLECTION = "sector_digest"
+PROCESSED_COLLECTION = "processed_urls"
+
+# ドキュメントの保持期間。**アプリが読むのは最新3日ぶん**（`SectorDigest.dayCount`）
+# だが、遡って読めるように少し長く持つ。
+# **FirestoreのTTLポリシーはSparkプランで使えない**ので、ここで消す（`edgar.py` と同じ）
+RETENTION_DAYS = 30
+# 処理済みURLの保持期間。設計メモの通り90日
+PROCESSED_RETENTION_DAYS = 90
+PURGE_LIMIT = 300
+BATCH_SIZE = 400
+
+# 何時間ぶんを見るか。cronが遅れることを前提に、1日ぶんより広く取る
+# （GitHub Actionsのスケジュールは実測で4時間以上遅れたことがある）
+LOOKBACK_HOURS = 30
+
+# **取得元ごとに窓を変える。** ニュースは毎時出るが、IRの発表は数日おきで、
+# HNの点数は投稿から丸一日かけて伸びる。同じ30時間で切ると、この2つは
+# ほぼ常に0件になる（実測はdocstringにある）。
+#
+# **窓を広げても同じ記事を二度要約しない。** `processed_urls` で落ちる
+LOOKBACK_BY_ORIGIN = {
+    "ir": 96,
+    "hacker_news": 72,
+}
+
+# 選別に渡す上限。ここまでは機械的に落とす（LLMを使わない）
+MAX_CANDIDATES = 40
+# 実際に載せる件数
+PICK_COUNT = 5
+
+# 対象ティッカー。**記事に紐付ける表示用**で、取得の絞り込みには使わない
+TICKERS = {
+    "NVIDIA": "NVDA",
+    "AMD": "AMD",
+    "Advanced Micro Devices": "AMD",
+    "Broadcom": "AVGO",
+    "TSMC": "TSM",
+    "Taiwan Semiconductor": "TSM",
+    "ASML": "ASML",
+    "Micron": "MU",
+    "Intel": "INTC",
+    "Arm": "ARM",
+    "Supermicro": "SMCI",
+    "Super Micro": "SMCI",
+    "Marvell": "MRVL",
+    "KLA": "KLAC",
+    "Lam Research": "LRCX",
+    "Applied Materials": "AMAT",
+    "SK hynix": "000660.KS",
+    "Samsung Electronics": "005930.KS",
+}
+
+# GoogleニュースRSSに投げる問い合わせ。**英語で引く。**
+# 要約は4言語ぶん作るので、入力は1つの言語に揃えた方が選別も要約も安定する。
+# AI・半導体の一次情報は英語の面がいちばん厚い
+QUERIES = [
+    "NVIDIA", "TSMC", "Samsung Electronics", "SK hynix", "ASML",
+    "Broadcom", "AMD semiconductor", "Micron HBM",
+    "OpenAI", "Anthropic", "Google DeepMind", "xAI",
+    "AI chip export controls", "AI data center capex",
+]
+
+GOOGLE_NEWS = "https://news.google.com/rss/search"
+
+# 各社のIR。**実測で通ったものだけ入れてある**（上のdocstringに全部の結果がある）。
+# 落ちても他の取得は続ける作りなので、増やすときは `--inspect` で件数を見てから
+IR_FEEDS = {
+    "NVIDIA": "https://nvidianews.nvidia.com/releases.xml",
+    "AMD": "https://ir.amd.com/rss/news-releases.xml",
+    "SK hynix": "https://news.skhynix.com/feed/",
+    "Intel": "https://newsroom.intel.com/feed",
+}
+
+HN_SEARCH = "https://hn.algolia.com/api/v1/search_by_date"
+# **設計メモの `points > 100` は30時間の窓だと0件になる**（上のdocstringの実測）。
+# HNの点数は投稿から丸一日かけて伸びるので、窓を広げて閾値を下げてある
+HN_MIN_POINTS = 50
+HN_QUERIES = ["nvidia", "semiconductor", "AI chip", "LLM inference", "TSMC"]
+
+# 見出しに1つも入っていなければ落とす。**Hacker Newsのために置いてある**
+# （Googleニュース側は企業名で引いているので、たいてい素通りする）
+KEYWORDS = [
+    "ai", "artificial intelligence", "llm", "model", "gpu", "chip", "semiconductor",
+    "silicon", "wafer", "foundry", "hbm", "memory", "datacenter", "data center",
+    "inference", "training", "nvidia", "tsmc", "asml", "amd", "intel", "broadcom",
+    "micron", "samsung", "hynix", "openai", "anthropic", "deepmind", "xai", "arm",
+    "accelerator", "cuda", "transformer", "neural",
+]
+
+# 区分。**アプリの `SectorCategory` と文字列を揃える。**
+# アプリは知らない値を `.other` に倒すので、ここを増やしてもアプリは壊れない
+CATEGORIES = ["chip", "model", "funding", "policy", "product"]
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 言語
+#
+# **キーはアプリの `SectorDigest.languageKeys` が引く名前と揃える。**
+# 片方だけ変えると、その言語の利用者に英語が出続ける（壊れないので気付きにくい）。
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+# Sonnetが直接書く言語。**元記事が英語なので、英語は訳さずに書かせる**
+WRITTEN = ("ja", "en")
+# Haikuが英語から訳す言語
+TRANSLATED = {
+    "zh_Hant": "Traditional Chinese (Taiwan usage)",
+    "ko": "Korean",
+}
+
+MODEL_SELECT = "claude-haiku-4-5"
+MODEL_SUMMARY = "claude-sonnet-5"
+MODEL_TRANSLATE = "claude-haiku-4-5"
+
+# 出力課金は入力の5倍高い。**上限を切らないと無駄に長い出力が返る**
+MAX_TOKENS_SELECT = 2000
+MAX_TOKENS_SUMMARY = 6000
+# 繁體中文・韓国語は同じ内容でも日本語よりトークンが増えやすいので広めに取る
+MAX_TOKENS_TRANSLATE = 5000
+
+# 実行の終わりに概算を出すためだけの表（$ / 100万トークン）。
+# **課金の正はコンソール側。** ここは桁を見誤らないための目安
+PRICING = {
+    "claude-haiku-4-5": (1.00, 5.00),
+    "claude-sonnet-5": (2.00, 10.00),
+}
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 取得
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+_last_request = 0.0
+
+
+def fetch(url, params=None, retries=2, headers=None):
+    """**落ちても例外を投げない呼び出し元がいる。** ここは投げる側で、
+    呼び出し元が取得元ごとに握りつぶす（1つの取得元が落ちても他は続ける）"""
+    global _last_request
+    last_error = None
+    for attempt in range(retries + 1):
+        wait = MIN_INTERVAL - (time.time() - _last_request)
+        if wait > 0:
+            time.sleep(wait)
+        _last_request = time.time()
+        try:
+            res = requests.get(
+                url,
+                params=params,
+                timeout=TIMEOUT,
+                headers={"User-Agent": USER_AGENT, **(headers or {})},
+            )
+            if res.status_code == 200:
+                return res
+            last_error = f"HTTP {res.status_code}"
+            # 4xxは待っても変わらない。5xxと429だけ間を置いて試し直す
+            if res.status_code not in (429, 500, 502, 503, 504):
+                break
+        except requests.RequestException as e:
+            last_error = str(e)
+        time.sleep(1.0 * (attempt + 1))
+    raise RuntimeError(f"{url}: {last_error}")
+
+
+_TAG = re.compile(r"<[^>]+>")
+_SPACE = re.compile(r"\s+")
+
+
+def to_text(markup, limit=300):
+    """RSSのdescriptionはHTMLで入っている。**全文は投げない**ので短く落とす（R6）"""
+    if not markup:
+        return ""
+    text = _TAG.sub(" ", html.unescape(markup))
+    text = _SPACE.sub(" ", text).strip()
+    return text[:limit]
+
+
+def _local(tag):
+    """Atomは名前空間付きで返る。`{http://www.w3.org/2005/Atom}entry` → `entry`"""
+    return tag.rsplit("}", 1)[-1]
+
+
+def _find(node, name):
+    for child in node:
+        if _local(child.tag) == name:
+            return child
+    return None
+
+
+def _text(node, name):
+    child = _find(node, name)
+    if child is None:
+        return ""
+    if child.text:
+        return child.text.strip()
+    return ""
+
+
+def parse_date(value):
+    """RFC822（RSS）とISO8601（Atom）の両方を受ける。読めなければNone"""
+    if not value:
+        return None
+    try:
+        parsed = parsedate_to_datetime(value)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC)
+    except (TypeError, ValueError):
+        pass
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
+    except ValueError:
+        return None
+
+
+def parse_feed(xml, default_source=""):
+    """RSSでもAtomでも同じ形に畳む。**読めない項目は落として続ける**"""
+    try:
+        root = ET.fromstring(xml)
+    except ET.ParseError as e:
+        raise RuntimeError(f"XMLを読めなかった: {e}")
+
+    items = []
+    for node in root.iter():
+        if _local(node.tag) not in ("item", "entry"):
+            continue
+
+        title = _text(node, "title")
+        link = _text(node, "link")
+        if not link:
+            # Atomは <link href="..."/>
+            for child in node:
+                if _local(child.tag) == "link" and child.get("href"):
+                    link = child.get("href")
+                    break
+        if not title or not link:
+            continue
+
+        published = parse_date(
+            _text(node, "pubDate") or _text(node, "published") or _text(node, "updated")
+        )
+
+        source = default_source
+        source_node = _find(node, "source")
+        if source_node is not None and (source_node.text or "").strip():
+            source = source_node.text.strip()
+
+        items.append({
+            "title": html.unescape(title).strip(),
+            "url": link.strip(),
+            "source": source,
+            "description": to_text(_text(node, "description") or _text(node, "summary")),
+            "published_at": published,
+        })
+    return items
+
+
+# GoogleニュースのタイトルはRSS側で ` - 配信元` が付く。要約に配信元を混ぜない
+_GOOGLE_SUFFIX = re.compile(r"\s+-\s+[^-]{2,40}$")
+
+
+def collect_google_news():
+    items = []
+    for query in QUERIES:
+        params = {"q": f'"{query}"', "hl": "en-US", "gl": "US", "ceid": "US:en"}
+        try:
+            res = fetch(GOOGLE_NEWS, params=params)
+            picked = parse_feed(res.content)
+        except RuntimeError as e:
+            print(f"  Googleニュース「{query}」: 取得に失敗したので飛ばす {e}")
+            continue
+        for item in picked:
+            item["title"] = _GOOGLE_SUFFIX.sub("", item["title"]).strip()
+            item["origin"] = "google_news"
+            item["query"] = query
+        print(f"  Googleニュース「{query}」: {len(picked)} 件")
+        items.extend(picked)
+    return items
+
+
+def collect_ir():
+    items = []
+    for company, url in IR_FEEDS.items():
+        try:
+            res = fetch(url)
+            picked = parse_feed(res.content, default_source=f"{company} IR")
+        except RuntimeError as e:
+            # **会社によってはRSSを出していない・botを弾く。** 落ちても続ける
+            print(f"  IR {company}: 取得に失敗したので飛ばす {e}")
+            continue
+        for item in picked:
+            item["source"] = f"{company} IR"
+            item["origin"] = "ir"
+        print(f"  IR {company}: {len(picked)} 件")
+        items.extend(picked)
+    return items
+
+
+def collect_hacker_news(_since):
+    # **HNだけ窓が広い。** 点数が伸びるのを待つ必要がある（`LOOKBACK_BY_ORIGIN`）
+    since = datetime.now(UTC) - timedelta(hours=LOOKBACK_BY_ORIGIN["hacker_news"])
+    items = []
+    for query in HN_QUERIES:
+        params = {
+            "tags": "story",
+            "query": query,
+            "hitsPerPage": 20,
+            "numericFilters": f"points>{HN_MIN_POINTS},created_at_i>{int(since.timestamp())}",
+        }
+        try:
+            res = fetch(HN_SEARCH, params=params)
+            hits = res.json().get("hits", [])
+        except (RuntimeError, ValueError) as e:
+            print(f"  Hacker News「{query}」: 取得に失敗したので飛ばす {e}")
+            continue
+        picked = 0
+        for hit in hits:
+            url = hit.get("url")
+            title = (hit.get("title") or "").strip()
+            # 本文だけの投稿（urlが無い）は元記事が無いので出さない
+            if not url or not title:
+                continue
+            items.append({
+                "title": title,
+                "url": url,
+                "source": "Hacker News",
+                "description": "",
+                "published_at": parse_date(hit.get("created_at")),
+                "origin": "hacker_news",
+                "points": hit.get("points"),
+            })
+            picked += 1
+        print(f"  Hacker News「{query}」: {picked} 件")
+    return items
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 前処理（LLMを使わない）
+#
+# **ここで機械的に落とすのが最大の費用対策。** 150件前後を40件まで落としてから
+# 初めてLLMに渡す。
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+_NORMALIZE = re.compile(r"[^a-z0-9]+")
+
+# 見出しの型で落とすもの。**配信元では捕まえきれない**（まともな媒体も
+# 「買うべきか」記事を出す）。設計メモの「意見の再生産を入れない」に対応する
+JUNK_TITLE = re.compile(
+    r"stock price prediction|price prediction|should you buy|should i buy"
+    r"|reasons to buy|reasons to sell|is a buy|is it too late to buy"
+    r"|p/e ratio|price target|best stocks|top \d+ stocks|stocks to buy"
+    r"|here'?s why|why i'?m |prediction:|forecast:|could make you a millionaire"
+    r"|billionaires are|wall street'?s .* price|analyst[s]? (say|see|raise|cut)"
+    r"|better buy|vs\.? .* which|what to expect from .* stock"
+    r"|top pick for|clear winner|charts point",
+    re.I,
+)
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 英語の記事だけを通す
+#
+# **要約に入れる記事は英語だけにする。** GoogleニュースRSSは `hl=en-US` で引いても
+# 現地語の媒体を混ぜて返す。入力の言語が揃っていないと、選別も要約も安定しない。
+#
+# 実測（2026-08-30・直近30時間の210件）:
+#
+#     見出しが非ラテン文字      0 件
+#     本文が非ラテン文字        0 件
+#     配信元だけが非ラテン文字  3 件  （매일경제 / 스포츠조선 / تسنیم）
+#
+# つまり `hl=en-US` の時点でほぼ英語になっていて、残るのは
+# **「英語版を出している現地の媒体」**だけだった。これは落とす。英語で書かれてはいるが
+# 自国向けの記事の機械翻訳で、AI・半導体の面に足すものが無い
+# （実測で釣れたのはスポーツ紙の芸能記事だった）。
+#
+# **英語の機能語で判定しない。** ラテン文字の非英語（スペイン語・ポルトガル語・
+# ドイツ語など）を捕まえられないか試したが、**実測で該当0件・誤検知12件**だった。
+# 見出しは "Judge blocks Anthropic blacklisting" のように機能語を持たない書き方が
+# 普通にあるので、この方向の判定は入れない。
+#
+# ⚠️ **アプリ側の `NewsSourceFilter` とは判断が逆になる。** あちらは
+# 「ラテン文字を含まない配信元は判断できないので通す」（通さないと日本・韓国・台湾の
+# 面が空になる）。ここは英語の記事だけを集める面なので、同じ配信元を落とす。
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+NON_LATIN = re.compile(
+    "[\u0370-\u03ff"   # ギリシャ
+    "\u0400-\u04ff"    # キリル
+    "\u0590-\u05ff"    # ヘブライ
+    "\u0600-\u06ff"    # アラビア
+    "\u0900-\u097f"    # デーヴァナーガリー
+    "\u0980-\u09ff"    # ベンガル
+    "\u0e00-\u0e7f"    # タイ
+    "\u3040-\u30ff"    # ひらがな・カタカナ
+    "\u3400-\u4dbf"    # 漢字（拡張A）
+    "\u4e00-\u9fff"    # 漢字
+    "\uac00-\ud7af]"   # ハングル
+)
+
+# 1文字混ざっただけで落とさない（`2μm` のような書き方があるため）。
+# 割合で見るので、見出し全体が現地語のときだけ当たる
+NON_LATIN_LIMIT = 0.15
+
+
+def non_latin_ratio(text):
+    letters = [c for c in text or "" if c.isalpha()]
+    if not letters:
+        return 0.0
+    return sum(1 for c in letters if NON_LATIN.match(c)) / len(letters)
+
+
+def is_english(item):
+    """英語の記事か。**見出し・本文・配信元の3か所を見る。**
+
+    配信元まで見るのは、実測で残った3件が
+    **「見出しも本文も英語だが、媒体が現地語」**という形だったため。
+    """
+    if non_latin_ratio(item["title"]) > NON_LATIN_LIMIT:
+        return False
+    if non_latin_ratio(item.get("description")) > NON_LATIN_LIMIT:
+        return False
+    if non_latin_ratio(item.get("source")) > NON_LATIN_LIMIT:
+        return False
+    return True
+
+
+# 点数。**通すかどうかではなく、40件に絞るときの並び順を決める**
+SCORE_IR = 100
+SCORE_MAJOR = 50
+SCORE_HN = 20
+
+# 一次情報のために必ず空けておく枠。点数が低くても、IRは最低これだけ選別に回す。
+# **これが無いと、Googleニュースの物量にIRが常に負ける**（実測で50件すべて落ちた）
+IR_RESERVED = 8
+
+
+def score(item):
+    """**LLMに渡す40件を選ぶための機械的な点数。** 中身は見ない（見るのは選別工程）"""
+    origin = item.get("origin")
+    if origin == "ir":
+        return SCORE_IR
+    if origin == "hacker_news":
+        return SCORE_HN
+    source = item.get("source")
+    # **`is_allowed` をそのまま使わない。** あれはラテン文字を含まない配信元を
+    # 「判断できないので通す」で True にする（`news_sources` の設計）。
+    # 落とす判定にはそれで正しいが、**点数に使うと現地語の媒体がすべて
+    # 主要紙と同じ点になる**。実測でスポーツ紙の芸能記事が上位に来た
+    if news_sources.is_undecidable(source):
+        return 0
+    return SCORE_MAJOR if news_sources.is_allowed(source) else 0
+
+
+def is_excluded(item):
+    """落とすもの。**除外リストと見出しの型だけ**で、ホワイトリスト漏れでは落とさない"""
+    if JUNK_TITLE.search(item["title"]):
+        return "見出しの型"
+    source = news_sources.normalize(item.get("source"))
+    for name in news_sources.KNOWN_EXCLUDED:
+        if source and source.startswith(news_sources.normalize(name)):
+            return "除外した配信元"
+    return None
+
+
+_WORD = re.compile(r"[a-z0-9]+")
+# 見出しの語がこれ以上重なっていたら同じ話とみなす
+SIMILAR_THRESHOLD = 0.6
+# どの見出しにも出るので、重なりの判定から外す
+_STOPWORDS = {
+    "the", "a", "an", "of", "to", "in", "on", "for", "and", "or", "is", "are",
+    "with", "as", "at", "by", "its", "it", "that", "this", "from", "over", "after",
+}
+
+
+def words(title):
+    return {w for w in _WORD.findall(title.lower()) if w not in _STOPWORDS and len(w) > 2}
+
+
+def dedupe_similar(items):
+    """**同じ発表が配信元違いで並ぶのを1つに畳む。**
+
+    実測で、1つの提訴のニュースが8件に増殖して枠を食っていた。見出しの文字が
+    違うのでURLでも正規化した見出しでも落ちない。語の重なりで見るしかない。
+
+    **点数の高いものを残す。** 呼ぶ前に点数順に並べておくこと。
+    """
+    kept = []
+    kept_words = []
+    dropped = 0
+    for item in items:
+        w = words(item["title"])
+        if not w:
+            kept.append(item)
+            kept_words.append(w)
+            continue
+        duplicate = False
+        for seen in kept_words:
+            if not seen:
+                continue
+            overlap = len(w & seen) / min(len(w), len(seen))
+            if overlap >= SIMILAR_THRESHOLD:
+                duplicate = True
+                break
+        if duplicate:
+            dropped += 1
+            continue
+        kept.append(item)
+        kept_words.append(w)
+    return kept, dropped
+
+
+def url_hash(url):
+    return hashlib.sha256(url.encode("utf-8")).hexdigest()
+
+
+def title_key(title):
+    """見出しの正規化。**同じ発表が複数の配信元から来る**ので、URLだけでは重複が残る"""
+    return _NORMALIZE.sub("", title.lower())[:80]
+
+
+def has_keyword(item):
+    text = f"{item['title']} {item.get('description', '')}".lower()
+    return any(k in text for k in KEYWORDS)
+
+
+def tickers_for(item):
+    """記事に関係する銘柄。**表示用の事実として添えるだけ**で、推奨ではない。
+    LLMには訊かない（作り話が混ざるより、当たらない方がまし）"""
+    text = f"{item['title']} {item.get('description', '')}"
+    found = []
+    for name, ticker in TICKERS.items():
+        if re.search(rf"\b{re.escape(name)}\b", text, re.I) and ticker not in found:
+            found.append(ticker)
+    return found[:4]
+
+
+def preprocess(items, since):
+    """LLMに渡す40件を作る。**ここではLLMを一切使わない**（最大の費用対策）。
+
+    順番は「点数 → 新しさ」。**新しさだけで切るとIRが全滅する**（実測で50件すべてが
+    Googleニュースに押し出された）ので、一次情報に枠を空けてある。
+    """
+    now = datetime.now(UTC)
+    seen_urls = set()
+    seen_titles = set()
+    kept = []
+
+    dropped = {"古い": 0, "重複": 0, "英語以外": 0, "キーワード外": 0,
+               "見出しの型": 0, "除外した配信元": 0}
+    for item in items:
+        published = item.get("published_at")
+        # **日時が読めなかった記事は残す。** 落とすと、日時を持たないフィードが丸ごと消える
+        hours = LOOKBACK_BY_ORIGIN.get(item.get("origin"))
+        limit = (now - timedelta(hours=hours)) if hours else since
+        if published is not None and published < limit:
+            dropped["古い"] += 1
+            continue
+        if item["url"] in seen_urls or title_key(item["title"]) in seen_titles:
+            dropped["重複"] += 1
+            continue
+        # **英語の記事だけを要約に入れる。** キーワードより先に見る
+        # （キーワードはラテン文字で書いてあるので、現地語の記事は素通りする）
+        if not is_english(item):
+            dropped["英語以外"] += 1
+            continue
+        if not has_keyword(item):
+            dropped["キーワード外"] += 1
+            continue
+        reason = is_excluded(item)
+        if reason:
+            dropped[reason] += 1
+            continue
+        seen_urls.add(item["url"])
+        seen_titles.add(title_key(item["title"]))
+        item["tickers"] = tickers_for(item)
+        item["score"] = score(item)
+        kept.append(item)
+
+    kept.sort(
+        key=lambda i: (i["score"], i.get("published_at") or datetime.min.replace(tzinfo=UTC)),
+        reverse=True,
+    )
+    kept, similar = dedupe_similar(kept)
+    dropped["似た見出し"] = similar
+
+    # **一次情報の枠を先に確保する。** 点数だけで並べても、Googleニュースの中に
+    # 通信社の記事が多い日はIRが押し出される
+    ir = [i for i in kept if i.get("origin") == "ir"][:IR_RESERVED]
+    # **`in` で引かない。** 中身が辞書なので値の比較になり、遅いうえに
+    # たまたま同じ内容の行があると両方消える
+    reserved = {id(i) for i in ir}
+    rest = [i for i in kept if id(i) not in reserved]
+    selected = (ir + rest)[:MAX_CANDIDATES]
+    # 選別のプロンプトでは新しい順に並んでいた方が読みやすい
+    selected.sort(
+        key=lambda i: (i["score"], i.get("published_at") or datetime.min.replace(tzinfo=UTC)),
+        reverse=True,
+    )
+
+    print(f"  前処理: {len(items)} 件 → 候補 {len(kept)} 件 → 選別に渡す {len(selected)} 件")
+    print(f"          落とした内訳: {dropped}")
+    print(f"          うちIR: {sum(1 for i in selected if i.get('origin') == 'ir')} 件 / "
+          f"通信社・主要紙: {sum(1 for i in selected if i['score'] == SCORE_MAJOR)} 件")
+    return selected
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 選別・要約・翻訳
+#
+# **助言業の線を越えさせない。** 月額課金のアプリで個別銘柄の助言をすると
+# 投資助言・代理業の登録が要る（金融庁の監督指針 VII-3-1(2)②イ）。
+# `edgar.py` と同じ制約をここにも掛ける。**この構造を崩さないこと。**
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+NO_ADVICE = """You are describing what happened. You are NOT giving investment advice.
+
+Absolute constraints — the app is a paid subscription, and advice on individual
+securities behind a paywall requires an investment-advisory registration:
+
+- Never suggest buying or selling, and never imply it is a good or bad time to do either.
+- Never give a price target, rating, score, or recommendation.
+- Never predict that a share price will rise or fall.
+- Describe what happened. Keep interpretation to the minimum needed to make the facts
+  understandable.
+- Do not state anything the source does not say. If a number is unclear, leave it out."""
+
+SELECT_SYSTEM = f"""You curate a daily AI-and-semiconductor news digest for a stock-watching app.
+
+Pick the items that a reader following the AI and semiconductor industry would want to
+know about today. Prefer primary information — company announcements, filings, official
+figures, concrete product or capacity news, regulatory decisions — over opinion pieces,
+listicles, "3 reasons to buy" articles, price-movement recaps, and rewrites of other
+outlets' reporting.
+
+Drop near-duplicates: if several items cover the same announcement, keep only the one
+with the most substantial source.
+
+{NO_ADVICE}"""
+
+SUMMARY_SYSTEM = f"""You write short news summaries for an AI-and-semiconductor digest in
+a stock-watching app.
+
+Write for a reader who follows the industry but is not an engineer. Lead with what
+actually happened and the concrete numbers. No preamble, no "in a recent announcement".
+
+{NO_ADVICE}"""
+
+TRANSLATE_SYSTEM = f"""You translate short news summaries for an AI-and-semiconductor
+digest in a stock-watching app.
+
+Rules:
+- Do NOT translate proper nouns: company names (NVIDIA, TSMC, SK hynix), tickers (NVDA),
+  and product names (Blackwell, HBM3E) stay in their original form.
+- Do NOT convert numbers, units, currencies or dates. Keep "$" and "%" as they are.
+- Translate the meaning, not word for word. It must read as if written by a native
+  speaker of the target language, using the vocabulary that retail investors in that
+  market actually use.
+- Keep roughly the same length as the source.
+
+{NO_ADVICE}"""
+
+
+def _usage(totals, model, response):
+    """使ったトークンを足していく。**終わりに概算を出すため**"""
+    usage = getattr(response, "usage", None)
+    if not usage:
+        return
+    entry = totals.setdefault(model, {"input": 0, "output": 0, "cache_read": 0})
+    entry["input"] += getattr(usage, "input_tokens", 0) or 0
+    entry["output"] += getattr(usage, "output_tokens", 0) or 0
+    entry["cache_read"] += getattr(usage, "cache_read_input_tokens", 0) or 0
+
+
+def _call(client, totals, *, model, system, prompt, max_tokens, schema):
+    """1コール。**出力の形をスキーマで固定する**（前置きが付いて json.loads が落ちるのを防ぐ）。
+
+    **失敗はNoneに畳む。** 1コールのために実行ごと止めない。
+
+    システムプロンプトは毎回同じなので `cache_control` を付けてある。
+    ただし**いまの長さ（1000トークン未満）ではキャッシュに載らないことが多い**
+    （最小のキャッシュ単位に届かない）。実際に効いているかは実行の終わりに出る
+    `キャッシュ読み` で分かる。
+    """
+    try:
+        response = client.messages.create(
+            model=model,
+            max_tokens=max_tokens,
+            system=[{
+                "type": "text",
+                "text": system,
+                "cache_control": {"type": "ephemeral"},
+            }],
+            messages=[{"role": "user", "content": prompt}],
+            output_config={"format": {"type": "json_schema", "schema": schema}},
+        )
+    except Exception as e:
+        print(f"    {model} の呼び出しに失敗: {e}")
+        return None
+
+    _usage(totals, model, response)
+    text = next((b.text for b in response.content if getattr(b, "type", None) == "text"), None)
+    if not text:
+        print(f"    {model} が本文を返さなかった")
+        return None
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as e:
+        print(f"    {model} のJSONを読めなかった: {e}")
+        return None
+
+
+SELECT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "picks": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "index": {"type": "integer"},
+                    "category": {"type": "string", "enum": CATEGORIES},
+                },
+                "required": ["index", "category"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["picks"],
+    "additionalProperties": False,
+}
+
+
+def select(client, totals, candidates):
+    """**40件を1コールで捌く（R1）。** 1件ずつ投げるとシステムプロンプトを40回払う"""
+    lines = []
+    for i, item in enumerate(candidates):
+        source = item.get("source") or item.get("origin", "")
+        description = item.get("description", "")
+        line = f"[{i}] {item['title']} — {source}"
+        if description:
+            line += f"\n    {description[:200]}"
+        lines.append(line)
+
+    prompt = f"""Here are today's candidate items.
+
+{chr(10).join(lines)}
+
+Choose at most {PICK_COUNT} items to publish, best first. For each, return its index and
+one category:
+
+  chip    = semiconductors, fabs, capacity, memory, packaging, hardware supply
+  model   = AI models, research results, capability or benchmark news
+  funding = funding rounds, investments, acquisitions, capex commitments
+  policy  = regulation, export controls, government action, litigation
+  product = shipping products and services built on AI
+
+Return fewer than {PICK_COUNT} if fewer are worth publishing. Do not pad the list."""
+
+    data = _call(
+        client, totals,
+        model=MODEL_SELECT, system=SELECT_SYSTEM, prompt=prompt,
+        max_tokens=MAX_TOKENS_SELECT, schema=SELECT_SCHEMA,
+    )
+    if not data:
+        return []
+
+    picked = []
+    for pick in data.get("picks", [])[:PICK_COUNT]:
+        index = pick.get("index")
+        # **範囲外の番号を信じない。** 出てきた番号がずれていると別の記事を載せる
+        if not isinstance(index, int) or not (0 <= index < len(candidates)):
+            print(f"    選別が範囲外の番号を返した: {index}")
+            continue
+        item = dict(candidates[index])
+        item["category"] = pick.get("category") if pick.get("category") in CATEGORIES else "other"
+        picked.append(item)
+    return picked
+
+
+def _text_schema(fields):
+    props = {f: {"type": "string"} for f in fields}
+    return {
+        "type": "object",
+        "properties": {
+            "items": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": props,
+                    "required": list(props),
+                    "additionalProperties": False,
+                },
+            }
+        },
+        "required": ["items"],
+        "additionalProperties": False,
+    }
+
+
+SUMMARY_SCHEMA = _text_schema(["title_ja", "summary_ja", "title_en", "summary_en"])
+TRANSLATE_SCHEMA = _text_schema(["title", "summary"])
+
+
+def summarize(client, totals, picked):
+    """**日本語と英語を1コールで書かせる。**
+
+    元記事が英語なので、英語だけ「日本語からの翻訳」にすると往復になって痩せる。
+    入力は1回ぶんしか払わないので、増えるのは出力だけ。
+    """
+    lines = []
+    for i, item in enumerate(picked):
+        source = item.get("source") or ""
+        lines.append(
+            f"[{i}] {item['title']} — {source}\n"
+            f"    {item.get('description', '') or '(no description in the feed)'}"
+        )
+
+    prompt = f"""Summarize each item below, in order.
+
+{chr(10).join(lines)}
+
+For each item return:
+- title_ja / title_en: a headline of at most 40 characters stating what happened.
+- summary_ja / summary_en: 2 sentences in plain language.
+
+Write the Japanese natively — it must not read like a translation. Return exactly
+{len(picked)} items, in the same order."""
+
+    data = _call(
+        client, totals,
+        model=MODEL_SUMMARY, system=SUMMARY_SYSTEM, prompt=prompt,
+        max_tokens=MAX_TOKENS_SUMMARY, schema=SUMMARY_SCHEMA,
+    )
+    if not data:
+        return None
+
+    rows = data.get("items", [])
+    if len(rows) != len(picked):
+        # **件数がずれたら畳まない。** 順番で突き合わせているので、ずれると
+        # 別の記事の要約が付く（見た目には気付けない事故になる）
+        print(f"    要約の件数がずれた: {len(rows)} / {len(picked)}")
+        return None
+    return rows
+
+
+def translate(client, totals, language, name, rows):
+    """**元記事ではなく、出来上がった英語の要約を訳す（R3）。**
+
+    入力が1/3になり、単価も1/3になる。翻訳は要約より簡単なのでHaikuで足りる。
+
+    **言語ごとに別コールにする。** 1コールで3言語を出させると、`max_tokens` を
+    言語ごとに切れず、1言語が壊れたときに他まで巻き添えになる。
+    """
+    lines = []
+    for i, row in enumerate(rows):
+        lines.append(f"[{i}] {row['title_en']}\n    {row['summary_en']}")
+
+    prompt = f"""Translate each item below into {name}.
+
+{chr(10).join(lines)}
+
+Return exactly {len(rows)} items, in the same order, each with a `title` and a `summary`."""
+
+    data = _call(
+        client, totals,
+        model=MODEL_TRANSLATE, system=TRANSLATE_SYSTEM, prompt=prompt,
+        max_tokens=MAX_TOKENS_TRANSLATE, schema=TRANSLATE_SCHEMA,
+    )
+    if not data:
+        return None
+
+    items = data.get("items", [])
+    if len(items) != len(rows):
+        print(f"    {language} の翻訳の件数がずれた: {len(items)} / {len(rows)}")
+        return None
+    return items
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Firestore
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+def already_processed(db, urls):
+    """**要約の前に引く。** 費用が乗る前に捨てる（R7）"""
+    stored = set()
+    refs = [db.collection(PROCESSED_COLLECTION).document(url_hash(u)) for u in urls]
+    for i in range(0, len(refs), 200):
+        try:
+            for doc in db.get_all(refs[i:i + 200]):
+                if doc.exists:
+                    stored.add(doc.id)
+        except Exception as e:
+            # 引けなくても止めない。**二度要約するだけ**で、壊れはしない
+            print(f"  処理済みの引き当てに失敗したので飛ばす: {e}")
+            return set()
+    return stored
+
+
+def mark_processed(db, urls):
+    now = datetime.now(UTC)
+    expires = now + timedelta(days=PROCESSED_RETENTION_DAYS)
+    batch = db.batch()
+    for url in urls:
+        batch.set(
+            db.collection(PROCESSED_COLLECTION).document(url_hash(url)),
+            {"processedAt": now, "expiresAt": expires},
+        )
+    batch.commit()
+
+
+def purge_expired(db, collection, field="expiresAt"):
+    """保持期間を過ぎたものを消す。
+
+    **TTLポリシーの代わり。** Sparkプラン（無料）のコンソールに項目そのものが無い。
+    **消しすぎないよう上限を置く。** 消し残っても次の実行で片付く。
+    """
+    now = datetime.now(UTC)
+    try:
+        query = db.collection(collection)
+        try:
+            from google.cloud.firestore_v1.base_query import FieldFilter
+            query = query.where(filter=FieldFilter(field, "<", now))
+        except ImportError:
+            query = query.where(field, "<", now)
+        stale = list(query.limit(PURGE_LIMIT).stream())
+    except Exception as e:
+        # 索引が無い・権限が無いなど。**取り込みは止めない**（掃除は次回でよい）
+        print(f"{collection} の期限切れを引けなかったので掃除を飛ばす: {e}")
+        return
+
+    if not stale:
+        return
+
+    deleted = 0
+    for i in range(0, len(stale), BATCH_SIZE):
+        batch = db.batch()
+        for doc in stale[i:i + BATCH_SIZE]:
+            batch.delete(doc.reference)
+        try:
+            batch.commit()
+            deleted += len(stale[i:i + BATCH_SIZE])
+        except Exception as e:
+            print(f"{collection} の削除に失敗したので中断: {e}")
+            break
+    print(f"{collection}: 期限切れを {deleted} 件消した"
+          + ("（上限に達したので残りは次回）" if len(stale) == PURGE_LIMIT else ""))
+
+
+def to_rows(picked, summaries, translations):
+    """Firestoreに入れる形にする。**アプリの `SectorDigest.newsItem` が読む形**"""
+    rows = []
+    for i, item in enumerate(picked):
+        summary = summaries[i]
+        row = {
+            "source": item.get("source") or "",
+            "url": item["url"],
+            "tickers": item.get("tickers", []),
+            "category": item.get("category", "other"),
+            "ja": {"title": summary["title_ja"], "summary": summary["summary_ja"]},
+            "en": {"title": summary["title_en"], "summary": summary["summary_en"]},
+        }
+        published = item.get("published_at")
+        if published:
+            row["published_at"] = published
+        for language, items in translations.items():
+            row[language] = {"title": items[i]["title"], "summary": items[i]["summary"]}
+        rows.append(row)
+    return rows
+
+
+def write_digest(db, doc_id, rows):
+    """**その日のドキュメントに足す形で書く。**
+
+    二度走っても上書きで減らさない。`processed_urls` があるので二度目は
+    たいてい0件になるが、そのときに `news: []` で潰さないようにする。
+    """
+    ref = db.collection(COLLECTION).document(doc_id)
+    existing = ref.get()
+    news = []
+    if existing.exists:
+        news = (existing.to_dict() or {}).get("news") or []
+
+    known = {r.get("url") for r in news}
+    added = [r for r in rows if r["url"] not in known]
+    if not added:
+        print("その日のドキュメントに足すものが無い")
+        return 0
+
+    now = datetime.now(UTC)
+    ref.set({
+        "news": news + added,
+        "generated_at": now,
+        "expiresAt": now + timedelta(days=RETENTION_DAYS),
+    }, merge=True)
+    return len(added)
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 取り込み
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+def collect(since):
+    print("収集")
+    items = collect_google_news() + collect_ir() + collect_hacker_news(since)
+    print(f"  合計 {len(items)} 件")
+    return items
+
+
+def report_cost(totals):
+    if not totals:
+        return
+    print("\n使ったトークン")
+    total = 0.0
+    for model, u in totals.items():
+        rate_in, rate_out = PRICING.get(model, (0.0, 0.0))
+        cost = u["input"] / 1_000_000 * rate_in + u["output"] / 1_000_000 * rate_out
+        total += cost
+        print(f"  {model}: 入力 {u['input']:,} / 出力 {u['output']:,} "
+              f"/ キャッシュ読み {u['cache_read']:,} → 約 ${cost:.4f}")
+    print(f"  この実行の概算: 約 ${total:.4f}（月30日で約 ${total * 30:.2f}）")
+
+
+def main(db, client):
+    totals = {}
+    now = datetime.now(UTC)
+    since = now - timedelta(hours=LOOKBACK_HOURS)
+    dry_run = os.environ.get("DRY_RUN") == "1"
+
+    # **取り込みより先に掃除する。** 取り込みが途中で落ちても掃除は済んでいる
+    if not dry_run:
+        purge_expired(db, COLLECTION)
+        purge_expired(db, PROCESSED_COLLECTION)
+
+    candidates = preprocess(collect(since), since)
+    if not candidates:
+        print("候補が無いので中止")
+        return
+
+    stored = already_processed(db, [c["url"] for c in candidates])
+    fresh = [c for c in candidates if url_hash(c["url"]) not in stored]
+    print(f"候補 {len(candidates)} 件 / 処理済み {len(stored)} 件 / 新規 {len(fresh)} 件")
+    if not fresh:
+        print("新しい記事が無いので中止")
+        return
+
+    print("選別")
+    picked = select(client, totals, fresh)
+    if not picked:
+        print("載せるものが無いので中止")
+        report_cost(totals)
+        return
+    for item in picked:
+        print(f"  [{item['category']}] {item['title']} — {item.get('source', '')}")
+
+    print("要約（日本語・英語）")
+    summaries = summarize(client, totals, picked)
+    if not summaries:
+        print("要約できなかったので中止")
+        report_cost(totals)
+        return
+
+    print("翻訳")
+    translations = {}
+    for language, name in TRANSLATED.items():
+        items = translate(client, totals, language, name, summaries)
+        if items:
+            translations[language] = items
+            print(f"  {language}: {len(items)} 件")
+        else:
+            # **1言語が壊れても他は出す。** アプリは訳の欠けた言語を英語に倒す
+            print(f"  {language}: 訳せなかったので、この言語だけ英語に倒れる")
+
+    rows = to_rows(picked, summaries, translations)
+    doc_id = now.astimezone(JST).strftime("%Y-%m-%d")
+
+    print(f"\n{doc_id} に {len(rows)} 件")
+    for row in rows:
+        print(f"  [{row['category']}] {row['ja']['title']}")
+
+    if dry_run:
+        print("\nDRY_RUN のため書き込みませんでした")
+        report_cost(totals)
+        return
+
+    added = write_digest(db, doc_id, rows)
+    mark_processed(db, [r["url"] for r in rows])
+    print(f"書き込み {added} 件")
+    report_cost(totals)
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 構造の確認（副作用なし）
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+def inspect():
+    """**FirestoreにもClaudeにも触れない。** いつ走らせても副作用が無い"""
+    print(f"User-Agent: {USER_AGENT}")
+    print(f"見る範囲: 直近 {LOOKBACK_HOURS} 時間 / 選別に渡す上限: {MAX_CANDIDATES} 件\n")
+
+    since = datetime.now(UTC) - timedelta(hours=LOOKBACK_HOURS)
+    items = collect(since)
+
+    by_origin = {}
+    for item in items:
+        by_origin[item.get("origin", "?")] = by_origin.get(item.get("origin", "?"), 0) + 1
+    print(f"\n取得元の内訳: {by_origin}")
+
+    candidates = preprocess(items, since)
+    print(f"\n=== 選別に渡す {len(candidates)} 件（新しい順・上位15） ===")
+    for i, item in enumerate(candidates[:15]):
+        published = item.get("published_at")
+        stamp = published.astimezone(JST).strftime("%m-%d %H:%M") if published else "  日時不明  "
+        tickers = ",".join(item["tickers"]) or "-"
+        print(f"  [{i:2}] {stamp} 点{item['score']:3} {tickers:12} {item['title'][:64]}")
+        print(f"       {item.get('source', '')} / {item['url'][:80]}")
+
+    if not candidates:
+        print("\n⚠️ 候補が0件。取得元がすべて落ちているか、キーワードが厳しすぎる")
+        return 1
+
+    with_description = sum(1 for c in candidates if c.get("description"))
+    print(f"\ndescriptionのある候補: {with_description}/{len(candidates)}")
+    print("（要約はタイトル＋descriptionだけで作る。0に近いと中身の薄い要約になる）")
+    return 0
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--inspect", action="store_true", help="収集と前処理だけ試す")
+    args = parser.parse_args()
+
+    if args.inspect:
+        sys.exit(inspect())
+
+    import firebase_admin
+    from anthropic import Anthropic
+    from firebase_admin import credentials, firestore
+
+    service_account = json.loads(os.environ["FIREBASE_SERVICE_ACCOUNT"])
+    firebase_admin.initialize_app(credentials.Certificate(service_account))
+
+    main(firestore.client(), Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"].strip()))

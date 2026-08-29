@@ -1,0 +1,63 @@
+name: Sector digest
+
+on:
+  schedule:
+    # **cronの曜日はUTC基準。** JSTの月〜金に配信するにはUTCの日〜木（0-4）を指定する。
+    # UTC 20:00 + 9時間 = 翌日のJST 5:00 なので、日付をまたぐ側になる。
+    #
+    # 朝のブリーフィング（UTC 20:30 = JST 5:30）の**30分前**に置いてある。
+    - cron: '0 20 * * 0-4'   # UTC 20:00 = 日本時間 翌5:00（月〜金）
+
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: '動かし方'
+        required: true
+        default: inspect
+        type: choice
+        options: [inspect, dry-run, send]
+
+# **定刻に動かないことを前提にしてある。** GitHub Actionsのスケジュールは共有ランナーの
+# キュー待ちで遅れる（このリポジトリでは4時間26分遅れた実績がある）。取得元は
+# 30〜96時間ぶんを見ているので、数時間の遅れでは取りこぼさない。
+#
+# 遅れて朝のブリーフィングを追い越しても、**その日のドキュメントに足す形で書く**ので
+# 内容が減ることはない（`write_digest`）。
+concurrency:
+  group: sector-digest
+  cancel-in-progress: false
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - run: pip install -r requirements.txt
+
+      # 取得と前処理だけ。**FirestoreにもClaudeにも触れないので副作用が無い。**
+      # 取得元を疑うとき（IRのRSSが落ちた・候補が0件になった）はこれで確かめる
+      - name: 構造を確認する
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'inspect'
+        run: python scripts/sector_digest.py --inspect
+
+      # 要約と翻訳までは走らせるが、Firestoreには書かない。
+      # **初回はこれで文面と費用を見てから send にすること**
+      - name: 要約する（書き込まない）
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'dry-run'
+        run: python scripts/sector_digest.py
+        env:
+          DRY_RUN: '1'
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+
+      - name: 取り込んでFirestoreへ書く
+        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'send')
+        run: python scripts/sector_digest.py
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
