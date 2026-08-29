@@ -167,13 +167,14 @@ LOOKBACK_HOURS = 30
 # **窓を広げても同じ記事を二度要約しない。** `processed_urls` で落ちる
 LOOKBACK_BY_ORIGIN = {
     "ir": 96,
+    "practice": 96,   # 個人・企業のブログは毎日は出ない
     "hacker_news": 72,
 }
 
 # 選別に渡す上限。ここまでは機械的に落とす（LLMを使わない）
 MAX_CANDIDATES = 40
-# 実際に載せる件数
-PICK_COUNT = 5
+# 実際に載せる件数。業界の動きと使い方の両方を入れるので、企業名で引いていた頃より広げてある
+PICK_COUNT = 8
 
 # 対象ティッカー。**記事に紐付ける表示用**で、取得の絞り込みには使わない
 TICKERS = {
@@ -199,12 +200,37 @@ TICKERS = {
 
 # GoogleニュースRSSに投げる問い合わせ。**英語で引く。**
 # 要約は4言語ぶん作るので、入力は1つの言語に揃えた方が選別も要約も安定する。
-# AI・半導体の一次情報は英語の面がいちばん厚い
+# AI・半導体の一次情報は英語の面がいちばん厚い。
+#
+# **企業名では引かない。** 以前は NVIDIA / TSMC / OpenAI … と企業名を並べていたが、
+# それだと「どの会社の話か」でしか記事が集まらず、業界全体の動きや使い方の記事が
+# 入ってこない。**話題で引く。** 主要企業の発表は業界のクエリと下のIRで拾える。
+#
+# 引用符は付けない。実測（2026-08-30）でフレーズ一致にすると
+# `AI model release` `chip export controls` `AI productivity tools` が
+# **そろって0件**になった（その語順で書かれた見出しが無い）。
+#
+# 各クエリの直近30時間の収穫（実測）はコメントに残してある。0件が続くようなら
+# `--inspect` で確かめてから差し替える
 QUERIES = [
-    "NVIDIA", "TSMC", "Samsung Electronics", "SK hynix", "ASML",
-    "Broadcom", "AMD semiconductor", "Micron HBM",
-    "OpenAI", "Anthropic", "Google DeepMind", "xAI",
-    "AI chip export controls", "AI data center capex",
+    # ── 業界の動き ──
+    "AI industry",              # 19
+    "AI data center",           # 33
+    "AI infrastructure",        # 22
+    "AI chips",                 # 20
+    "semiconductor industry",   #  5
+    "chip manufacturing",       #  4
+    "AI model release",         #  2
+    "AI regulation",            #  2
+    "chip export controls",     #  2
+    "AI funding round",         #  2
+    "HBM memory",               #  1
+    # ── AIの使い方 ──
+    "AI agents enterprise",     # 12
+    "AI workflow",              #  6
+    "AI coding assistant",      #  3
+    "enterprise AI adoption",   #  3
+    "AI productivity tools",    #  1
 ]
 
 GOOGLE_NEWS = "https://news.google.com/rss/search"
@@ -216,27 +242,56 @@ IR_FEEDS = {
     "AMD": "https://ir.amd.com/rss/news-releases.xml",
     "SK hynix": "https://news.skhynix.com/feed/",
     "Intel": "https://newsroom.intel.com/feed",
+    # AIの作り手側の発表。半導体のIRと同じ「会社が自分で出した一次情報」
+    "OpenAI": "https://openai.com/news/rss.xml",
+    "Google AI": "https://blog.google/technology/ai/rss/",
+}
+
+# **AIの使い方の記事。**
+#
+# GoogleニュースRSSはここが弱い。実測（2026-08-30）で候補227件のうち、実務・使い方
+# らしい見出しは**8件**しかなく、そのうち選別に渡る40件に届いたのは**2件**だった。
+# 「使い方も入れる」と決めた以上、取りに行く先を用意しないと成立しない。
+#
+# 実際に叩いて通ったものだけ入れてある（`--inspect` で件数を見てから増やすこと）。
+PRACTICE_FEEDS = {
+    "Simon Willison": "https://simonwillison.net/atom/everything/",
+    "Hugging Face": "https://huggingface.co/blog/feed.xml",
+    "Stack Overflow": "https://stackoverflow.blog/feed/",
+    "Meta Engineering": "https://engineering.fb.com/feed/",
 }
 
 HN_SEARCH = "https://hn.algolia.com/api/v1/search_by_date"
 # **設計メモの `points > 100` は30時間の窓だと0件になる**（上のdocstringの実測）。
 # HNの点数は投稿から丸一日かけて伸びるので、窓を広げて閾値を下げてある
 HN_MIN_POINTS = 50
-HN_QUERIES = ["nvidia", "semiconductor", "AI chip", "LLM inference", "TSMC"]
+# **短い語で引くと関連度が落ちる。** Algoliaの `search_by_date` は日付順なので、
+# `RAG` `GPU` のような短い語だと無関係な記事が上位に来る（実測）。
+# 最後は `has_keyword` と選別で落ちるが、候補の枠を食うので語を具体的にしてある
+HN_QUERIES = [
+    "AI agents", "LLM inference", "AI chip", "semiconductor",
+    "open source model", "AI coding",
+]
 
 # 見出しに1つも入っていなければ落とす。**Hacker Newsのために置いてある**
 # （Googleニュース側は企業名で引いているので、たいてい素通りする）
 KEYWORDS = [
+    # 業界
     "ai", "artificial intelligence", "llm", "model", "gpu", "chip", "semiconductor",
     "silicon", "wafer", "foundry", "hbm", "memory", "datacenter", "data center",
     "inference", "training", "nvidia", "tsmc", "asml", "amd", "intel", "broadcom",
     "micron", "samsung", "hynix", "openai", "anthropic", "deepmind", "xai", "arm",
-    "accelerator", "cuda", "transformer", "neural",
+    "accelerator", "cuda", "transformer", "neural", "fab", "lithography",
+    # 使い方。**これが無いと使い方の記事が落ちる**
+    # （`How we run coding agents in production` が実際に落ちた）
+    "agent", "agentic", "copilot", "assistant", "chatbot", "coding", "workflow",
+    "prompt", "fine-tuning", "finetuning", "embedding", "rag", "context window",
+    "automation", "multimodal", "reasoning", "benchmark", "open source",
 ]
 
 # 区分。**アプリの `SectorCategory` と文字列を揃える。**
 # アプリは知らない値を `.other` に倒すので、ここを増やしてもアプリは壊れない
-CATEGORIES = ["chip", "model", "funding", "policy", "product"]
+CATEGORIES = ["chip", "model", "funding", "policy", "product", "howto"]
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 言語
@@ -259,9 +314,9 @@ MODEL_TRANSLATE = "claude-haiku-4-5"
 
 # 出力課金は入力の5倍高い。**上限を切らないと無駄に長い出力が返る**
 MAX_TOKENS_SELECT = 2000
-MAX_TOKENS_SUMMARY = 6000
+MAX_TOKENS_SUMMARY = 8000
 # 繁體中文・韓国語は同じ内容でも日本語よりトークンが増えやすいので広めに取る
-MAX_TOKENS_TRANSLATE = 5000
+MAX_TOKENS_TRANSLATE = 6000
 
 # 実行の終わりに概算を出すためだけの表（$ / 100万トークン）。
 # **課金の正はコンソール側。** ここは桁を見誤らないための目安
@@ -407,7 +462,9 @@ _GOOGLE_SUFFIX = re.compile(r"\s+-\s+[^-]{2,40}$")
 def collect_google_news():
     items = []
     for query in QUERIES:
-        params = {"q": f'"{query}"', "hl": "en-US", "gl": "US", "ceid": "US:en"}
+        # **フレーズ一致にしない**（`QUERIES` のコメントを参照）。
+        # 引用符が要るクエリは `QUERIES` 側に書く
+        params = {"q": query, "hl": "en-US", "gl": "US", "ceid": "US:en"}
         try:
             res = fetch(GOOGLE_NEWS, params=params)
             picked = parse_feed(res.content)
@@ -423,22 +480,32 @@ def collect_google_news():
     return items
 
 
-def collect_ir():
+def collect_feeds(feeds, origin, label, suffix=""):
+    """RSS/Atomのフィードをまとめて引く。**1つ落ちても他は続ける**"""
     items = []
-    for company, url in IR_FEEDS.items():
+    for name, url in feeds.items():
+        source = f"{name}{suffix}"
         try:
             res = fetch(url)
-            picked = parse_feed(res.content, default_source=f"{company} IR")
+            picked = parse_feed(res.content, default_source=source)
         except RuntimeError as e:
-            # **会社によってはRSSを出していない・botを弾く。** 落ちても続ける
-            print(f"  IR {company}: 取得に失敗したので飛ばす {e}")
+            # **出していない・botを弾くフィードがある。** 落ちても続ける
+            print(f"  {label} {name}: 取得に失敗したので飛ばす {e}")
             continue
         for item in picked:
-            item["source"] = f"{company} IR"
-            item["origin"] = "ir"
-        print(f"  IR {company}: {len(picked)} 件")
+            item["source"] = source
+            item["origin"] = origin
+        print(f"  {label} {name}: {len(picked)} 件")
         items.extend(picked)
     return items
+
+
+def collect_ir():
+    return collect_feeds(IR_FEEDS, "ir", "IR", suffix=" IR")
+
+
+def collect_practice():
+    return collect_feeds(PRACTICE_FEEDS, "practice", "実務")
 
 
 def collect_hacker_news(_since):
@@ -571,12 +638,33 @@ def is_english(item):
 
 # 点数。**通すかどうかではなく、40件に絞るときの並び順を決める**
 SCORE_IR = 100
+# 実務のフィードは「使い方」の担い手。IRより下、通信社より上に置く
+SCORE_PRACTICE = 80
 SCORE_MAJOR = 50
 SCORE_HN = 20
 
 # 一次情報のために必ず空けておく枠。点数が低くても、IRは最低これだけ選別に回す。
 # **これが無いと、Googleニュースの物量にIRが常に負ける**（実測で50件すべて落ちた）
-IR_RESERVED = 8
+IR_RESERVED = 5
+
+# 使い方の記事のために空けておく枠。**これが無いと業界ニュースの物量に負ける**
+# （実測で、使い方らしい候補8件のうち40件に届いたのは2件だった）
+HOWTO_RESERVED = 8
+
+# 使い方・実務らしい見出し。**点数ではなく枠の確保に使う**
+PRACTICAL_TITLE = re.compile(
+    r"\bhow (we|i|to)\b|\bwhat we learned\b|\blessons\b|\bin production\b"
+    r"|\bguide\b|\bwe built\b|\bcase study\b|\bworkflow|\bplaybook\b|\btutorial\b"
+    r"|\bbest practices\b|\bhands-on\b|\bdeep dive\b|\bwhy we\b|\bbuilding\b",
+    re.I,
+)
+
+
+def looks_practical(item):
+    """使い方の記事か。実務フィードから来たもの、または見出しがその形のもの"""
+    return item.get("origin") in ("practice", "hacker_news") or bool(
+        PRACTICAL_TITLE.search(item["title"])
+    )
 
 
 def score(item):
@@ -584,6 +672,8 @@ def score(item):
     origin = item.get("origin")
     if origin == "ir":
         return SCORE_IR
+    if origin == "practice":
+        return SCORE_PRACTICE
     if origin == "hacker_news":
         return SCORE_HN
     source = item.get("source")
@@ -663,9 +753,21 @@ def title_key(title):
     return _NORMALIZE.sub("", title.lower())[:80]
 
 
+# **語の境界で照合する。** 素直に `k in text` で書くと `"ai"` が
+# `chair` `maintain` `email` `said` に当たり、**判定がほぼ素通りになる**
+# （実測で1357件中1件しか落ちていなかった）。トピックで引くようにして
+# 雑音が増えたので、ここが効いていないと候補の枠を食われる
+# 末尾の `s?` は複数形のため。`agent` と `agents`、`tool` と `tools` を
+# 両方書き並べると表が二倍になり、片方だけ足し忘れる
+KEYWORD_RE = re.compile(
+    r"(?<![a-z0-9])(" + "|".join(re.escape(k) for k in sorted(KEYWORDS, key=len, reverse=True))
+    + r")s?(?![a-z0-9])",
+    re.I,
+)
+
+
 def has_keyword(item):
-    text = f"{item['title']} {item.get('description', '')}".lower()
-    return any(k in text for k in KEYWORDS)
+    return bool(KEYWORD_RE.search(f"{item['title']} {item.get('description', '')}"))
 
 
 def tickers_for(item):
@@ -728,14 +830,37 @@ def preprocess(items, since):
     kept, similar = dedupe_similar(kept)
     dropped["似た見出し"] = similar
 
-    # **一次情報の枠を先に確保する。** 点数だけで並べても、Googleニュースの中に
-    # 通信社の記事が多い日はIRが押し出される
-    ir = [i for i in kept if i.get("origin") == "ir"][:IR_RESERVED]
+    # **枠は「最低の確保」ではなく「上限」。**
+    #
+    # 一次情報（IR）と使い方の記事は数が少ないので、点数と新しさだけで40件を切ると
+    # 物量のある業界ニュースに埋め尽くされる。かといって点数を高くするだけだと、
+    # 今度は**IRが上位を占めて企業中心の面に戻る**（OpenAIとGoogleを足したら
+    # 実測で18/40がIRになった）。どちらにも上限を置いて配分する。
+    #
     # **`in` で引かない。** 中身が辞書なので値の比較になり、遅いうえに
     # たまたま同じ内容の行があると両方消える
-    reserved = {id(i) for i in ir}
-    rest = [i for i in kept if id(i) not in reserved]
-    selected = (ir + rest)[:MAX_CANDIDATES]
+    picked = []
+    taken = set()
+
+    def take(rows, limit):
+        for row in rows:
+            if limit <= 0:
+                break
+            if id(row) in taken:
+                continue
+            picked.append(row)
+            taken.add(id(row))
+            limit -= 1
+
+    take([i for i in kept if i.get("origin") == "ir"], IR_RESERVED)
+    take([i for i in kept if looks_practical(i)], HOWTO_RESERVED)
+    # 残りは業界のニュースで埋める。**IRと使い方はもう上限まで入っている**ので、
+    # ここでは点数の高い順＝通信社・主要紙から入る
+    take([i for i in kept
+          if i.get("origin") != "ir" and not looks_practical(i)],
+         MAX_CANDIDATES - len(picked))
+
+    selected = picked[:MAX_CANDIDATES]
     # 選別のプロンプトでは新しい順に並んでいた方が読みやすい
     selected.sort(
         key=lambda i: (i["score"], i.get("published_at") or datetime.min.replace(tzinfo=UTC)),
@@ -745,6 +870,7 @@ def preprocess(items, since):
     print(f"  前処理: {len(items)} 件 → 候補 {len(kept)} 件 → 選別に渡す {len(selected)} 件")
     print(f"          落とした内訳: {dropped}")
     print(f"          うちIR: {sum(1 for i in selected if i.get('origin') == 'ir')} 件 / "
+          f"使い方らしいもの: {sum(1 for i in selected if looks_practical(i))} 件 / "
           f"通信社・主要紙: {sum(1 for i in selected if i['score'] == SCORE_MAJOR)} 件")
     return selected
 
@@ -769,13 +895,24 @@ securities behind a paywall requires an investment-advisory registration:
   understandable.
 - Do not state anything the source does not say. If a number is unclear, leave it out."""
 
-SELECT_SYSTEM = f"""You curate a daily AI-and-semiconductor news digest for a stock-watching app.
+SELECT_SYSTEM = f"""You curate a daily AI-and-semiconductor digest for a stock-watching app.
 
-Pick the items that a reader following the AI and semiconductor industry would want to
-know about today. Prefer primary information — company announcements, filings, official
-figures, concrete product or capacity news, regulatory decisions — over opinion pieces,
-listicles, "3 reasons to buy" articles, price-movement recaps, and rewrites of other
-outlets' reporting.
+The digest covers two kinds of item, and a good day has both:
+
+1. **What happened in the industry** — company announcements, official figures, capacity
+   and manufacturing news, model releases, funding, regulation and export controls.
+   Prefer primary information over opinion pieces, listicles, price-movement recaps, and
+   rewrites of other outlets' reporting.
+
+2. **How AI is actually being used** — practical write-ups on putting AI to work: agents
+   and coding tools in real workflows, what a team learned adopting it, concrete
+   technique. Category `howto`. These are explainers rather than news, and that is fine —
+   what disqualifies one is being a thinly-disguised ad, a beginner listicle
+   ("10 ChatGPT prompts"), or a piece with no specifics.
+
+**Do not organise the digest around companies.** A reader wants to know where the
+industry is going, not to follow particular firms. If several items are about the same
+company, keep the strongest one and spend the remaining slots elsewhere.
 
 Drop near-duplicates: if several items cover the same announcement, keep only the one
 with the most substantial source.
@@ -816,10 +953,21 @@ def _usage(totals, model, response):
     entry["cache_read"] += getattr(usage, "cache_read_input_tokens", 0) or 0
 
 
-def _call(client, totals, *, model, system, prompt, max_tokens, schema):
+def _call(client, totals, *, model, system, prompt, max_tokens, schema, _retry=True):
     """1コール。**出力の形をスキーマで固定する**（前置きが付いて json.loads が落ちるのを防ぐ）。
 
     **失敗はNoneに畳む。** 1コールのために実行ごと止めない。
+
+    ⚠️ **思考を切ってある（`thinking: disabled`）。**
+    Sonnet 5 は `thinking` を省略すると**アダプティブ思考が既定で動く**。
+    思考のぶんも出力トークンとして数えられるので、`max_tokens` を要約の分量で
+    見積もっていると**途中で切れてJSONが壊れる**。実測（2026-08-30）で
+    出力が6,000（＝上限ぴったり）に張り付き、
+    `Unterminated string starting at: line 1 column 1336` で実行ごと落ちた。
+    ここは要約と翻訳の整形しかしていないので、思考は要らない。
+
+    `edgar.py` が同じ `max_tokens=6000` で通っているのは Sonnet 4.6 だから。
+    **4.6 は省略時に思考しない。モデルを上げるときはここを確かめること。**
 
     システムプロンプトは毎回同じなので `cache_control` を付けてある。
     ただし**いまの長さ（1000トークン未満）ではキャッシュに載らないことが多い**
@@ -830,6 +978,7 @@ def _call(client, totals, *, model, system, prompt, max_tokens, schema):
         response = client.messages.create(
             model=model,
             max_tokens=max_tokens,
+            thinking={"type": "disabled"},
             system=[{
                 "type": "text",
                 "text": system,
@@ -843,15 +992,29 @@ def _call(client, totals, *, model, system, prompt, max_tokens, schema):
         return None
 
     _usage(totals, model, response)
+
+    # **切れたことを黙って通さない。** 切れた出力は必ずJSONとして壊れるので、
+    # 下の except でも捕まるが、原因が「上限に当たった」だと分からない
+    truncated = getattr(response, "stop_reason", None) == "max_tokens"
     text = next((b.text for b in response.content if getattr(b, "type", None) == "text"), None)
-    if not text:
+
+    if not truncated and text:
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError as e:
+            print(f"    {model} のJSONを読めなかった: {e}")
+    elif truncated:
+        print(f"    {model} が max_tokens({max_tokens}) に達して切れた")
+    else:
         print(f"    {model} が本文を返さなかった")
-        return None
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError as e:
-        print(f"    {model} のJSONを読めなかった: {e}")
-        return None
+
+    # **1回だけ広げてやり直す。** ここで諦めると、1コールの失敗で
+    # その日のまとめが丸ごと出なくなる（実測で実際に起きた）
+    if _retry:
+        print(f"    上限を {max_tokens * 2} に広げてやり直す")
+        return _call(client, totals, model=model, system=system, prompt=prompt,
+                     max_tokens=max_tokens * 2, schema=schema, _retry=False)
+    return None
 
 
 SELECT_SCHEMA = {
@@ -898,6 +1061,11 @@ one category:
   funding = funding rounds, investments, acquisitions, capex commitments
   policy  = regulation, export controls, government action, litigation
   product = shipping products and services built on AI
+  howto   = how AI is actually used in practice — agents and tools in real workflows,
+            what a team learned adopting it, concrete technique
+
+Include one or two `howto` items when the list contains good ones. Do not force it —
+if nothing today qualifies, publish none rather than picking a weak one.
 
 Return fewer than {PICK_COUNT} if fewer are worth publishing. Do not pad the list."""
 
@@ -1146,7 +1314,8 @@ def write_digest(db, doc_id, rows):
 
 def collect(since):
     print("収集")
-    items = collect_google_news() + collect_ir() + collect_hacker_news(since)
+    items = (collect_google_news() + collect_ir() + collect_practice()
+             + collect_hacker_news(since))
     print(f"  合計 {len(items)} 件")
     return items
 
