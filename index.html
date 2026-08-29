@@ -1,105 +1,414 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>StockWatch AI — 世界の株価とニュースをAIがあなたの言語で要約</title>
-    <link rel="icon" type="image/svg+xml" href="icon.svg">
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Hiragino Sans', 'Hiragino Kaku Gothic ProN', sans-serif;
-            line-height: 1.8;
-            color: #333;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 20px;
-        }
-        .container {
-            max-width: 600px;
-            width: 100%;
-            background: #fff;
-            padding: 48px 36px;
-            border-radius: 20px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.15);
-            text-align: center;
-        }
-        .icon { width: 88px; height: 88px; margin: 0 auto 16px; display: block; }
-        h1 { font-size: 32px; color: #1a1a1a; margin-bottom: 4px; }
-        .tagline { font-size: 16px; color: #666; margin-bottom: 32px; }
-        .features { text-align: left; margin: 24px 0; }
-        .feature { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 16px; }
-        .feature-icon { font-size: 24px; flex-shrink: 0; width: 32px; text-align: center; }
-        .feature-text h3 { font-size: 15px; color: #1a1a1a; margin-bottom: 2px; }
-        .feature-text p { font-size: 13px; color: #666; }
-        .download {
-            display: inline-block;
-            background: #1a1a1a;
-            color: #fff;
-            padding: 14px 36px;
-            border-radius: 12px;
-            font-size: 16px;
-            font-weight: bold;
-            margin-top: 24px;
-            text-decoration: none;
-        }
-        .download:hover { background: #333; }
-        .links { display: flex; justify-content: center; gap: 24px; margin-top: 32px; flex-wrap: wrap; }
-        .links a { font-size: 13px; color: #999; text-decoration: none; }
-        .links a:hover { color: #667eea; text-decoration: underline; }
-        .footer { margin-top: 24px; font-size: 12px; color: #ccc; }
-    </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>StockWatch AI｜公式｜世界36市場の株価とニュースをAI要約</title>
+<meta name="description" content="『StockWatch AI』は、世界36市場の株価とニュースをAIが日本語で要約するiPhoneアプリ。英語のニュースも短い要約で読めます。無料ではじめられます。">
+
+<meta name="apple-itunes-app" content="app-id=6759182023">
+
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://stockwatchai.github.io/stockwatch-ai/">
+<meta property="og:site_name" content="StockWatch AI｜公式">
+<meta property="og:title" content="StockWatch AI｜世界36市場の株価とニュースをAI要約">
+<meta property="og:description" content="英語のニュースも、AIが日本語の短い要約に。無料ではじめられるiPhoneアプリ。">
+<meta property="og:image" content="https://stockwatchai.github.io/stockwatch-ai/ogp.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="StockWatch AI — 世界のニュースを、朝の3分に。">
+<meta property="og:locale" content="ja_JP">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="alternate" hreflang="en" href="https://stockwatchai.github.io/stockwatch-ai/en/">
+
+<link rel="icon" href="icon.png" type="image/png">
+<link rel="apple-touch-icon" href="icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&amp;family=Inter:wght@400;500;600;700&amp;display=swap" media="print" onload="this.media='all'">
+<noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&amp;family=Inter:wght@400;500;600;700&amp;display=swap"></noscript>
+
+<style>
+:root{
+  --navy:#0C2B49;
+  --blue:#0C79D0;
+  --blue-dk:#0A63AC;
+  --sky:#EEF5FC;
+  --sky2:#F7FAFD;
+  --slate:#5B6D82;
+  --line:#E1E9F1;
+  --rise:#12A06A;
+  --fall:#D9484A;
+  --white:#fff;
+  --r:14px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{
+  font-family:"Noto Sans JP","Inter",-apple-system,BlinkMacSystemFont,sans-serif;
+  color:var(--navy);background:var(--white);
+  line-height:1.9;-webkit-font-smoothing:antialiased;
+}
+img{max-width:100%;display:block}
+a{color:inherit}
+.num{font-family:"Inter",sans-serif;font-feature-settings:"tnum"}
+.wrap{width:100%;max-width:1080px;margin:0 auto;padding:0 20px}
+
+/* header */
+.hd{position:sticky;top:0;z-index:60;background:rgba(255,255,255,.94);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+.hd-in{display:flex;align-items:center;justify-content:space-between;height:64px}
+.logo{display:flex;align-items:center;gap:9px;font-weight:700;font-size:16px;letter-spacing:.01em}
+.logo-mk{width:28px;height:28px;border-radius:7px;display:block;box-shadow:0 0 0 1px rgba(12,43,73,.07) inset,0 1px 2px rgba(12,43,73,.10)}
+.hd-nav{display:flex;align-items:center;gap:26px;font-size:13.5px}
+.hd-nav a{text-decoration:none;color:var(--slate)}
+.hd-nav a:hover{color:var(--blue)}
+.hd-nav a.btn,.hd-nav a.btn:hover{color:#fff}
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:8px;
+  background:var(--blue);color:#fff;text-decoration:none;font-weight:700;font-size:15px;
+  border-radius:999px;padding:14px 30px;
+  box-shadow:0 8px 20px -10px rgba(12,121,208,.9);
+  transition:background .2s,transform .2s;
+}
+.btn:hover{background:var(--blue-dk);transform:translateY(-1px)}
+.btn-sm{font-size:13px;padding:9px 20px;box-shadow:none}
+.btn-gh{background:#fff;color:var(--blue);border:1.5px solid var(--blue);box-shadow:none}
+.btn-gh:hover{background:var(--sky);color:var(--blue-dk)}
+
+/* hero */
+.hero{background:linear-gradient(180deg,var(--sky) 0%,#F9FCFE 100%);padding:70px 0 84px;position:relative;overflow:hidden}
+.hero::after{content:"";position:absolute;width:620px;height:620px;border-radius:50%;background:radial-gradient(circle,rgba(12,121,208,.10),transparent 65%);top:-220px;right:-160px}
+.hero-in{display:grid;grid-template-columns:1.05fr .95fr;gap:48px;align-items:center;position:relative;z-index:1}
+.pill{display:inline-flex;align-items:center;gap:7px;background:#fff;border:1px solid var(--line);border-radius:999px;padding:6px 15px;font-size:12.5px;font-weight:500;color:var(--blue);margin-bottom:20px}
+.pill i{width:6px;height:6px;border-radius:50%;background:var(--rise);font-style:normal}
+h1{font-size:clamp(28px,4.4vw,44px);line-height:1.42;font-weight:700;letter-spacing:.005em;margin-bottom:20px}
+h1 em{font-style:normal;color:var(--blue)}
+.lead{font-size:16px;color:var(--slate);margin-bottom:30px;max-width:26em}
+.hero-cta{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+.hero-note{font-size:12.5px;color:var(--slate);margin-top:14px}
+
+/* phone */
+.phone{
+  width:270px;margin:0 auto;border-radius:38px;
+  background:#0C2B49;padding:10px;
+  box-shadow:0 34px 70px -34px rgba(12,43,73,.55);
+}
+.phone-scr{border-radius:29px;overflow:hidden;background:var(--sky2);aspect-ratio:9/19.5}
+.phone-scr picture{display:block;width:100%;height:100%}
+.phone-scr img{width:100%;height:100%;object-fit:cover}
+
+/* stats */
+.stats{border-bottom:1px solid var(--line)}
+.stats-in{display:grid;grid-template-columns:repeat(3,1fr);text-align:center;padding:34px 0}
+.stats-in>div+div{border-left:1px solid var(--line)}
+.st-n{font-family:"Inter",sans-serif;font-size:34px;font-weight:700;color:var(--blue);line-height:1.25}
+.st-n small{font-size:15px;font-weight:600;margin-left:2px}
+.st-l{font-size:12.5px;color:var(--slate)}
+
+/* sections */
+section{padding:82px 0}
+.tint{background:var(--sky2)}
+.sec-h{text-align:center;margin-bottom:52px}
+.sec-e{font-family:"Inter",sans-serif;font-size:12px;font-weight:600;letter-spacing:.16em;color:var(--blue-dk);margin-bottom:10px}
+.sec-t{font-size:clamp(22px,3.2vw,30px);font-weight:700;line-height:1.5}
+.sec-s{font-size:14.5px;color:var(--slate);margin-top:12px}
+
+/* feature rows */
+.row{display:grid;grid-template-columns:1fr 1fr;gap:56px;align-items:center;margin-bottom:76px}
+.row:last-child{margin-bottom:0}
+.row.rev .row-tx{order:2}
+.row-badge{display:inline-block;font-family:"Inter",sans-serif;font-size:11px;font-weight:700;letter-spacing:.12em;color:var(--blue-dk);background:var(--sky);border-radius:5px;padding:4px 11px;margin-bottom:16px}
+.row-h{font-size:23px;font-weight:700;line-height:1.55;margin-bottom:14px}
+.row-p{font-size:15px;color:var(--slate)}
+.row-fig{background:var(--sky);border-radius:22px;padding:34px;display:grid;place-items:center}
+.row-fig .phone{width:210px}
+
+/* steps */
+.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:24px;counter-reset:s}
+.step{background:#fff;border:1px solid var(--line);border-radius:var(--r);padding:30px 26px;position:relative}
+.step::before{
+  counter-increment:s;content:"0" counter(s);
+  font-family:"Inter",sans-serif;font-size:12px;font-weight:700;letter-spacing:.1em;
+  color:#fff;background:var(--blue);border-radius:999px;padding:4px 12px;
+  position:absolute;top:-13px;left:26px;
+}
+.step-h{font-size:16.5px;font-weight:700;margin-bottom:8px}
+.step-p{font-size:14px;color:var(--slate)}
+
+/* plans table */
+.tbl{width:100%;border-collapse:separate;border-spacing:0;background:#fff;border:1px solid var(--line);border-radius:var(--r);overflow:hidden;font-size:14.5px}
+.tbl th,.tbl td{padding:17px 18px;border-bottom:1px solid var(--line);text-align:center}
+.tbl th:first-child,.tbl td:first-child{text-align:left;color:var(--slate);font-weight:400}
+.tbl tbody th{background:#fff}
+.tbl thead th{background:var(--sky2);font-weight:700;font-size:14px}
+.tbl thead th.pro{background:var(--blue);color:#fff}
+.tbl tbody tr:last-child td{border-bottom:none}
+.tbl .price{font-family:"Inter",sans-serif;font-size:22px;font-weight:700}
+.tbl .price small{font-size:12px;font-weight:500;color:var(--slate)}
+.tbl .pro-c{background:rgba(12,121,208,.045);font-weight:500}
+.ck{color:var(--blue);font-weight:700}
+.plan-note{font-size:12.5px;color:var(--slate);margin-top:16px;text-align:center}
+
+/* trust */
+.trust{display:grid;grid-template-columns:repeat(3,1fr);gap:22px}
+.tcard{background:#fff;border:1px solid var(--line);border-radius:var(--r);padding:28px 26px}
+.tcard-h{font-size:16px;font-weight:700;margin-bottom:10px;display:flex;align-items:center;gap:9px}
+.tcard-h svg{flex:0 0 auto}
+.tcard-p{font-size:13.5px;color:var(--slate)}
+
+/* faq */
+.faq{max-width:760px;margin:0 auto}
+details{background:#fff;border:1px solid var(--line);border-radius:var(--r);margin-bottom:12px;overflow:hidden}
+summary{padding:19px 54px 19px 22px;font-size:15px;font-weight:500;cursor:pointer;list-style:none;position:relative}
+summary::-webkit-details-marker{display:none}
+summary::after{content:"";position:absolute;right:24px;top:27px;width:9px;height:9px;border-right:2px solid var(--blue);border-bottom:2px solid var(--blue);transform:rotate(45deg);transition:transform .25s}
+details[open] summary::after{transform:rotate(-135deg)}
+.faq-a{padding:0 22px 22px;font-size:14px;color:var(--slate)}
+
+/* final cta */
+.fin{background:linear-gradient(135deg,#0C2B49,#0C79D0);color:#fff;text-align:center;padding:78px 0}
+.fin h2{font-size:clamp(22px,3.4vw,32px);font-weight:700;line-height:1.55;margin-bottom:16px}
+.fin p{font-size:15px;opacity:.85;margin-bottom:32px}
+.fin .btn{background:#fff;color:var(--blue);box-shadow:0 12px 30px -14px rgba(0,0,0,.6)}
+.fin .btn:hover{background:#EAF3FB}
+
+/* footer */
+footer{background:#fff;border-top:1px solid var(--line);padding:46px 0 120px;font-size:13px;color:var(--slate)}
+.f-top{display:flex;flex-wrap:wrap;gap:20px 30px;justify-content:space-between;align-items:center;padding-bottom:26px;border-bottom:1px solid var(--line);margin-bottom:26px}
+.f-links{display:flex;flex-wrap:wrap;gap:24px}
+.f-links a{text-decoration:none}
+.f-links a:hover{color:var(--blue)}
+.fine{font-size:12px;line-height:1.85}
+.fine p+p{margin-top:9px}
+.copy{margin-top:22px;font-size:11.5px}
+
+/* mobile sticky cta */
+.sticky{
+  position:fixed;left:0;right:0;bottom:0;z-index:70;display:none;
+  background:rgba(255,255,255,.96);backdrop-filter:blur(10px);
+  border-top:1px solid var(--line);padding:11px 16px calc(11px + env(safe-area-inset-bottom));
+}
+.sticky .btn{width:100%;padding:15px}
+
+@media (max-width:900px){
+  .hero-in{grid-template-columns:1fr;gap:44px}
+  .hero{padding:52px 0 62px}
+  .row,.row.rev .row-tx{grid-template-columns:1fr;gap:30px;order:0}
+  .row{margin-bottom:56px}
+  .steps,.trust{grid-template-columns:1fr}
+  .hd-nav a{display:none}
+  section{padding:62px 0}
+  .stats-in{padding:26px 0}
+  .st-n{font-size:27px}
+  .sticky{display:block}
+  .tbl th,.tbl td{padding:14px 10px;font-size:13.5px}
+}
+:focus-visible{outline:3px solid rgba(12,121,208,.45);outline-offset:2px;border-radius:6px}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
 </head>
 <body>
-    <div class="container">
-        <img class="icon" src="icon.svg" alt="StockWatch AI">
-        <h1>StockWatch AI</h1>
-        <p class="tagline">世界36市場の値動きとニュースを、AIがあなたの言語で要約</p>
 
-        <div class="features">
-            <div class="feature">
-                <div class="feature-icon">🤖</div>
-                <div class="feature-text">
-                    <h3>AIによる要約</h3>
-                    <p>値動きの解説から始まる要約を15言語で。原文の言語が読めなくても中身が分かる</p>
-                </div>
-            </div>
-            <div class="feature">
-                <div class="feature-icon">🌅</div>
-                <div class="feature-text">
-                    <h3>毎日のブリーフィング</h3>
-                    <p>全銘柄をまとめた「今日のマーケットブリーフィング」をワンタップで</p>
-                </div>
-            </div>
-            <div class="feature">
-                <div class="feature-icon">🎨</div>
-                <div class="feature-text">
-                    <h3>AIカスタマイズ</h3>
-                    <p>初心者ガイド・プロアナリスト・バフェット流・テクニカル派から選択</p>
-                </div>
-            </div>
-            <div class="feature">
-                <div class="feature-icon">📱</div>
-                <div class="feature-text">
-                    <h3>世界36市場</h3>
-                    <p>米国・日本・香港・ロンドン・欧州・インド・ブラジルほか。通貨も取引時間もそのまま</p>
-                </div>
-            </div>
-        </div>
+<header class="hd">
+  <div class="wrap hd-in">
+    <div class="logo"><img class="logo-mk" src="icon.png" alt="" width="28" height="28">StockWatch AI</div>
+    <nav class="hd-nav">
+      <a href="#features">できること</a>
+      <a href="#plans">料金</a>
+      <a href="#faq">よくある質問</a>
+      <a class="btn btn-sm" href="#get">無料ではじめる</a>
+    </nav>
+  </div>
+</header>
 
-        <a class="download" href="https://apps.apple.com/jp/app/stockwatch-ai/id6759182023">App Storeでダウンロード</a>
-
-        <div class="links">
-            <a href="privacy.html">プライバシーポリシー</a>
-            <a href="terms.html">利用規約</a>
-            <a href="support.html">サポート</a>
-            <a href="en/">English</a>
-        </div>
-
-        <p class="footer">&copy; 2026 StockWatch Labs</p>
+<!-- HERO -->
+<div class="hero">
+  <div class="wrap hero-in">
+    <div>
+      <span class="pill"><i></i>世界36市場に対応</span>
+      <h1>世界のニュースを、<br><em>朝の3分</em>にまとめます。</h1>
+      <p class="lead">英語で流れてくる株式ニュースを、AIが日本語の短い要約に。米国株も日本株も、ひとつのアプリで追えます。</p>
+      <div class="hero-cta">
+        <a class="btn" id="get" href="https://apps.apple.com/jp/app/id6759182023">App Store で無料ダウンロード</a>
+        <a class="btn btn-gh btn-sm" href="#features">できることを見る</a>
+      </div>
+      <p class="hero-note">iPhone / iOS 17.6 以降　無料プランあり　アカウント登録なしで使えます</p>
     </div>
+    <div>
+      <div class="phone"><div class="phone-scr"><picture><source srcset="screens/01.webp" type="image/webp"><img src="screens/01.png" alt="StockWatch AI のホーム画面。登録した銘柄のニュースをまとめた「今日のまとめ」と、各銘柄の値動きが並んでいる" width="863" height="1870" fetchpriority="high" decoding="async"></picture></div></div>
+    </div>
+  </div>
+</div>
+
+<!-- STATS -->
+<div class="stats">
+  <div class="wrap stats-in">
+    <div><div class="st-n num">36</div><div class="st-l">対応市場</div></div>
+    <div><div class="st-n num">15</div><div class="st-l">AI要約の対応言語</div></div>
+    <div><div class="st-n num">¥0<small></small></div><div class="st-l">はじめる費用</div></div>
+  </div>
+</div>
+
+<!-- FEATURES -->
+<section id="features">
+  <div class="wrap">
+    <div class="sec-h">
+      <div class="sec-e num">FEATURES</div>
+      <h2 class="sec-t">情報を集める時間を、短くする。</h2>
+      <p class="sec-s">読むべきものだけが残るように設計しました。</p>
+    </div>
+
+    <div class="row">
+      <div class="row-tx">
+        <span class="row-badge num">AI SUMMARY</span>
+        <h3 class="row-h">英語のニュースを、<br>日本語の要約で読む。</h3>
+        <p class="row-p">海外の株式ニュースをAIが短くまとめます。要約から元の記事へたどれるので、気になったものだけ原文を開けば十分です。1本あたり数十秒で全体像がつかめます。</p>
+      </div>
+      <div class="row-fig"><div class="phone"><div class="phone-scr"><picture><source srcset="screens/02.webp" type="image/webp"><img src="screens/02.png" alt="銘柄の詳細画面。株価とチャートの下に、AIが日本語でまとめたニュースの要約が表示されている" width="863" height="1870" loading="lazy" decoding="async"></picture></div></div></div>
+    </div>
+
+    <div class="row rev">
+      <div class="row-tx">
+        <span class="row-badge num">36 MARKETS</span>
+        <h3 class="row-h">米国・日本・アジア・欧州を、<br>ひとつの画面で。</h3>
+        <p class="row-p">36の市場の株価とニュースをまとめて追えます。その日どこが動いたかは値動きの一覧で見渡せるので、市場ごとにアプリを開き直す必要はありません。</p>
+      </div>
+      <div class="row-fig"><div class="phone"><div class="phone-scr"><picture><source srcset="screens/03.webp" type="image/webp"><img src="screens/03.png" alt="ウォッチリストの値動き一覧。米国株と日本株の銘柄カードが同じ画面に並んでいる" width="863" height="1870" loading="lazy" decoding="async"></picture></div></div></div>
+    </div>
+
+    <div class="row">
+      <div class="row-tx">
+        <span class="row-badge num">MORNING BRIEF</span>
+        <h3 class="row-h">平日の朝、<br>まとめが届く。</h3>
+        <p class="row-p">ウォッチリストの銘柄について、前日の値動きと関連ニュースをまとめた通知が朝に届きます。通知をタップすればそのまま本文へ。出社前のわずかな時間で足ります。</p>
+      </div>
+      <div class="row-fig"><div class="phone"><div class="phone-scr"><picture><source srcset="screens/04.webp" type="image/webp"><img src="screens/04.png" alt="ブリーフィング画面。登録銘柄をまとめた「今日のマーケットブリーフィング」が表示されている" width="863" height="1870" loading="lazy" decoding="async"></picture></div></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- STEPS -->
+<section class="tint">
+  <div class="wrap">
+    <div class="sec-h">
+      <div class="sec-e num">HOW TO START</div>
+      <h2 class="sec-t">はじめかたは、3ステップ。</h2>
+    </div>
+    <div class="steps">
+      <div class="step">
+        <div class="step-h">アプリを入れる</div>
+        <p class="step-p">App Store からダウンロードします。アカウント登録は不要で、開いたその場から使えます。</p>
+      </div>
+      <div class="step">
+        <div class="step-h">銘柄を登録する</div>
+        <p class="step-p">気になる銘柄をウォッチリストに追加します。ティッカーでも企業名でも検索できます。</p>
+      </div>
+      <div class="step">
+        <div class="step-h">朝の通知を受け取る</div>
+        <p class="step-p">通知をオンにすると、平日の朝にまとめが届きます。オフのままでも自由に使えます。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- PLANS -->
+<section id="plans">
+  <div class="wrap">
+    <div class="sec-h">
+      <div class="sec-e num">PRICING</div>
+      <h2 class="sec-t">まずは無料で。</h2>
+      <p class="sec-s">物足りなくなったときだけ、Proへ。</p>
+    </div>
+    <table class="tbl">
+      <thead>
+        <tr><td></td><th scope="col">無料プラン</th><th scope="col" class="pro">Pro</th></tr>
+      </thead>
+      <tbody>
+        <tr><th scope="row">月額</th><td><span class="price num">¥0</span></td><td class="pro-c"><span class="price num">¥500</span> <small>/ 月</small></td></tr>
+        <tr><th scope="row">ウォッチリスト</th><td>10銘柄まで</td><td class="pro-c">制限なし</td></tr>
+        <tr><th scope="row">AI要約</th><td>1日10回まで</td><td class="pro-c">制限なし</td></tr>
+        <tr><th scope="row">朝のブリーフィング</th><td>週10回まで</td><td class="pro-c">毎営業日</td></tr>
+        <tr><th scope="row">36市場の株価・ニュース</th><td><span class="ck">✓</span></td><td class="pro-c"><span class="ck">✓</span></td></tr>
+        <tr><th scope="row">15言語のAI要約</th><td><span class="ck">✓</span></td><td class="pro-c"><span class="ck">✓</span></td></tr>
+      </tbody>
+    </table>
+    <p class="plan-note">Proは App Store 内での自動更新サブスクリプションです。解約はいつでも設定アプリから行えます。</p>
+  </div>
+</section>
+
+<!-- TRUST -->
+<section class="tint">
+  <div class="wrap">
+    <div class="sec-h">
+      <div class="sec-e num">ABOUT THE DATA</div>
+      <h2 class="sec-t">先に、正直にお伝えすること。</h2>
+    </div>
+    <div class="trust">
+      <div class="tcard">
+        <div class="tcard-h"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#0C79D0" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>株価には遅延があります</div>
+        <p class="tcard-p">表示される株価はリアルタイムではありません。取引の判断に使う場合は、必ずご利用の証券会社の情報をご確認ください。</p>
+      </div>
+      <div class="tcard">
+        <div class="tcard-h"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#0C79D0" stroke-width="2.2"><path d="M12 3l8 3.5V12c0 4.5-3.2 7.9-8 9-4.8-1.1-8-4.5-8-9V6.5z"/></svg>投資助言ではありません</div>
+        <p class="tcard-p">ニュースとその要約を届けるアプリです。特定の銘柄の売買をすすめたり、評価・格付けをすることはありません。</p>
+      </div>
+      <div class="tcard">
+        <div class="tcard-h"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#0C79D0" stroke-width="2.2"><path d="M4 5h16v11H4z"/><path d="M9 20h6M12 16v4"/></svg>要約は完璧ではありません</div>
+        <p class="tcard-p">AIによる要約は元の記事を正確に反映しないことがあります。重要な情報は一次情報でのご確認をお願いします。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FAQ -->
+<section id="faq">
+  <div class="wrap">
+    <div class="sec-h">
+      <div class="sec-e num">FAQ</div>
+      <h2 class="sec-t">よくある質問</h2>
+    </div>
+    <div class="faq">
+      <details><summary>無料のままでも使えますか？</summary><div class="faq-a">使えます。ウォッチリスト10銘柄、AI要約1日10回、朝のブリーフィング週10回の範囲で、期限なくお使いいただけます。</div></details>
+      <details><summary>アカウント登録は必要ですか？</summary><div class="faq-a">不要です。ダウンロードしてそのまま使いはじめられます。</div></details>
+      <details><summary>日本株にも対応していますか？</summary><div class="faq-a">対応しています。東京証券取引所を含む36市場の株価とニュースを扱っています。</div></details>
+      <details><summary>要約は日本語以外にもできますか？</summary><div class="faq-a">15言語に対応しています。アプリ内の設定から、表示言語とは別に要約の言語を選べます。</div></details>
+      <details><summary>Proはいつでも解約できますか？</summary><div class="faq-a">できます。iPhoneの「設定」→ Apple ID → サブスクリプションからいつでも解約でき、期間の終了までは引き続きお使いいただけます。</div></details>
+      <details><summary>Android版はありますか？</summary><div class="faq-a">現在はiPhone版のみを提供しています。</div></details>
+    </div>
+  </div>
+</section>
+
+<!-- FINAL CTA -->
+<div class="fin">
+  <div class="wrap">
+    <h2>今日の相場を、<br>3分で把握してみてください。</h2>
+    <p>無料プランあり／アカウント登録は不要です</p>
+    <a class="btn" href="https://apps.apple.com/jp/app/id6759182023">App Store で無料ダウンロード</a>
+  </div>
+</div>
+
+<footer>
+  <div class="wrap">
+    <div class="f-top">
+      <div class="logo"><img class="logo-mk" src="icon.png" alt="" width="28" height="28">StockWatch AI</div>
+      <div class="f-links">
+        <a href="/stockwatch-ai/terms">利用規約</a>
+        <a href="/stockwatch-ai/privacy">プライバシーポリシー</a>
+        <a href="/stockwatch-ai/en/">English</a>
+      </div>
+    </div>
+    <div class="fine">
+      <p>株価情報には遅延があります。本アプリが提供するニュースおよびAIによる要約は情報提供を目的としたものであり、特定の銘柄の売買を推奨するものではありません。投資の最終的な判断はご自身の責任でお願いいたします。</p>
+      <p>AIによる要約は、元の記事の内容を正確に反映しない場合があります。重要な情報については必ず一次情報をご確認ください。</p>
+      <p>Apple、App Store、iPhone は Apple Inc. の商標です。</p>
+    </div>
+    <div class="copy num">© 2026 StockWatch Labs</div>
+  </div>
+</footer>
+
+<div class="sticky">
+  <a class="btn" href="https://apps.apple.com/jp/app/id6759182023">App Store で無料ダウンロード</a>
+</div>
+
 </body>
 </html>
