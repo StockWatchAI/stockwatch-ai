@@ -8,6 +8,21 @@ on:
     # 朝のブリーフィング（UTC 20:30 = JST 5:30）の**30分前**に置いてある。
     - cron: '0 20 * * 0-4'   # UTC 20:00 = 日本時間 翌5:00（月〜金）
 
+    # ── AIフィードだけを2時間おきに追記する ──
+    #
+    # **まとめ（上）は1日1回のまま。** `sector_digest/{YYYY-MM-DD}` はアプリが
+    # 1日12件までしか出さないので、ここに足し続けると朝の8件が枠を埋めて
+    # 夕方の記事が出なくなる。フィードは publishedAt の降順で引く別の面なので、
+    # 足したぶんがそのまま前に出る。
+    #
+    # **20:00 を外してある。** 上の1日1回と同時刻に撃つと、同じ候補に対して
+    # 2本走って concurrency で待たされるだけになる。
+    #
+    # **土日も回す。** 平日しか走らないと、月曜の朝まで金曜の記事が最新のままになる。
+    # まとめの面が平日だけなのは「朝のブリーフィングの一部」だからで、
+    # フィードにはその制約が無い。
+    - cron: '0 0,2,4,6,8,10,12,14,16,18,22 * * *'
+
   workflow_dispatch:
     inputs:
       mode:
@@ -15,7 +30,7 @@ on:
         required: true
         default: inspect
         type: choice
-        options: [inspect, dry-run, send]
+        options: [inspect, dry-run, send, send-feed-only]
 
 # **定刻に動かないことを前提にしてある。** GitHub Actionsのスケジュールは共有ランナーの
 # キュー待ちで遅れる（このリポジトリでは4時間26分遅れた実績がある）。取得元は
@@ -55,9 +70,22 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
 
+      # まとめ＋フィード。1日1回（UTC 20:00）と、手動の send
       - name: 取り込んでFirestoreへ書く
-        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'send')
+        if: |
+          (github.event_name == 'schedule' && github.event.schedule == '0 20 * * 0-4')
+          || (github.event_name == 'workflow_dispatch' && inputs.mode == 'send')
         run: python scripts/sector_digest.py
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+
+      # AIフィードだけ。2時間おき（まとめのドキュメントには触らない）
+      - name: フィードだけ更新する
+        if: |
+          (github.event_name == 'schedule' && github.event.schedule != '0 20 * * 0-4')
+          || (github.event_name == 'workflow_dispatch' && inputs.mode == 'send-feed-only')
+        run: python scripts/sector_digest.py --feed-only
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
