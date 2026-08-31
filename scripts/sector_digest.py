@@ -1289,12 +1289,8 @@ def _call(client, totals, *, model, system, prompt, max_tokens, schema, _retry=T
     return None
 
 
-SELECT_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "picks": {
-            "type": "array",
-            "items": {
+# 1件ぶんの形。英語と現地語で同じものを使う
+_PICK_ITEM = {
                 "type": "object",
                 "properties": {
                     "index": {"type": "integer"},
@@ -1315,10 +1311,25 @@ SELECT_SCHEMA = {
                 },
                 "required": ["index", "category", "tags"],
                 "additionalProperties": False,
-            },
-        }
+}
+
+# **英語と現地語を別のフィールドで返させる。**
+#
+# 最初は1つの `picks` にまとめ、「英語は最大N件・現地語は言語ごとに最大M件」と
+# 文章で指示していた。**実測（2026-09-01）で2回続けて現地語が0件になった**
+# （同じ候補でフル実行のときは3件採っている）。1つの配列だと、英語の候補が
+# 強いぶんそちらで埋まって現地語まで意識が回らない。
+#
+# **フィールドを分けて両方 required にすると、モデルは現地語のぶんを
+# 別に考えざるを得なくなる。** 空配列を返す自由は残してある
+# （その日に載せるものが無ければ0件で正しい）。
+SELECT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "picks": {"type": "array", "items": _PICK_ITEM},
+        "local_picks": {"type": "array", "items": _PICK_ITEM},
     },
-    "required": ["picks"],
+    "required": ["picks", "local_picks"],
     "additionalProperties": False,
 }
 
@@ -1341,16 +1352,19 @@ def select(client, totals, candidates, limit=PICK_COUNT, local_limit=LOCAL_PICK_
 
 {chr(10).join(lines)}
 
-Choose at most {limit} of the English items to publish, best first.
+Return **two separate lists**.
 
-**The items marked `[ja local]`, `[ko local]` and `[zh_Hant local]` have their own slots
-and do not compete with the English ones.** Choose up to {local_limit} for each language
-that appears. Do not skip a language just because the English items are stronger — these
-are shown to a different reader. Apply the same bar within the language: it earns its
-slot by covering something the English list does not. If nothing in a language qualifies,
-return none for it.
+`picks` — at most {limit} of the English items, best first.
 
-For each item you choose, return its index and one category:
+`local_picks` — the items marked `[ja local]`, `[ko local]` and `[zh_Hant local]`.
+**Fill this list independently of `picks`.** Take up to {local_limit} for each language
+that appears, and work through the languages one at a time. These go to readers of that
+language who never see the English list, so "the English items are better" is not a
+reason to leave a language empty. What disqualifies a local item is re-reporting a story
+already in the English list, or being thin on its own terms. Return an empty list only if
+that is true of every local item today.
+
+For each item in either list, return its index and one category:
 
   chip    = semiconductors, fabs, capacity, memory, packaging, hardware supply
   model   = AI models, research results, capability or benchmark news
@@ -1383,11 +1397,11 @@ Return fewer than {limit} if fewer are worth publishing. Do not pad the list."""
         return []
 
     picked = []
-    # **枠は言語ごとに数える。** 上限を全体で1つにすると、英語の枠を現地語が
-    # 食う（逆も同じ）。プロンプトでも分けて指示してあるが、**モデルの数え方を
-    # 信じない**（範囲外の番号を信じないのと同じ理由）
+    # **枠は言語ごとに数える。** プロンプトでもフィールドでも分けてあるが、
+    # **モデルの数え方を信じない**（範囲外の番号を信じないのと同じ理由）。
+    # 英語のリストに現地語が混ざって返ってきても、ここで正しい枠に振り分かる
     counts = {}
-    for pick in data.get("picks", []):
+    for pick in list(data.get("picks") or []) + list(data.get("local_picks") or []):
         index = pick.get("index")
         # **範囲外の番号を信じない。** 出てきた番号がずれていると別の記事を載せる
         if not isinstance(index, int) or not (0 <= index < len(candidates)):
