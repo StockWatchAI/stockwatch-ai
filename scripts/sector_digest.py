@@ -6,8 +6,14 @@
     python3 scripts/sector_digest.py             # 収集→選別→要約→翻訳→Firestoreへ書く
 
 アプリ側は `SectorDigest.swift` / `SectorNewsView.swift` が `sector_digest/{YYYY-MM-DD}`
-を読み、「セクター」タブに出す。**銘柄に紐付かない唯一の面**で、ウォッチリストが
+を読み、「ニュース」タブに出す。**銘柄に紐付かない唯一の面**で、ウォッチリストが
 0件の利用者にも同じものが出る。
+
+**同じ結果を `ai_feed/{sha1}` にも1件1ドキュメントで書く**（設計メモ `ai-feed-spec.md`）。
+まとめの面が「その日の8件」を日付で束ねて読ませるのに対し、AIフィードは
+**利用者が `topics.json` の20タグから選んだトピックだけ**を流す面で、束ね方が違う。
+収集・選別・要約は**同じ1回ぶんを使い回す**ので、APIの呼び出しは1つも増えていない
+（タグ付けは選別と同じコールで取る）。
 
 **全利用者で同じ1ドキュメントを読む。** 内容が利用者ごとに変わらないので、APIの費用が
 利用者数に比例しない。**無料で出せる根拠はここ。** 「利用者ごとにパーソナライズ」を
@@ -292,6 +298,38 @@ KEYWORDS = [
 # 区分。**アプリの `SectorCategory` と文字列を揃える。**
 # アプリは知らない値を `.other` に倒すので、ここを増やしてもアプリは壊れない
 CATEGORIES = ["chip", "model", "funding", "policy", "product", "howto"]
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# AIフィードのトピック語彙（`topics.json`）
+#
+# `sector_digest/{YYYY-MM-DD}` は「その日の8件」を日付で束ねた面だが、AIフィードは
+# **利用者が選んだトピックだけを流す面**なので、記事1件＝1ドキュメントで
+# `ai_feed/{sha1}` にも書く。収集・選別・要約は上と**同じ1回ぶんを使い回す**。
+#
+# **収集を利用者ごとに回さない。** 出し分けはアプリ側でやる。ここを崩すと
+# APIの費用が利用者数に比例する（`sector_digest` を無料で出せている前提そのもの）。
+#
+# **タグはこの表のIDしか使わない。** LLMに自由生成させると表記ゆれで一致しなくなる。
+# 表はアプリ側（`Test Stock20260208/topics.json`）にも同じ中身の写しがある。
+# **片方だけ変えない**（IDが食い違うとアプリでラベルが引けず、そのタグだけ消える）。
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+TOPICS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "topics.json")
+
+with open(TOPICS_PATH, encoding="utf-8") as _f:
+    TOPICS = json.load(_f)["topics"]
+
+TOPIC_IDS = [t["id"] for t in TOPICS]
+# 選別のプロンプトに入れる説明。**IDと1行の説明だけ**（ラベルは4言語ぶんあって長い）
+TOPIC_HINTS = "\n".join(f"  {t['id']:16} {t['hint']}" for t in TOPICS)
+
+AI_FEED_COLLECTION = "ai_feed"
+# 1件に付けるタグの上限。**埋めさせない**（薄いタグを足すと絞り込みの精度が落ちる）
+MAX_TAGS = 3
+# 設計メモ §3。`publishedAt` が30日より古いものを消す。
+# **FirestoreのTTLポリシーはSparkプランで使えない**ので、`expiresAt` を自分で入れて
+# `purge_expired` に片付けさせる（`sector_digest` / `news` と同じ流儀）
+AI_FEED_RETENTION_DAYS = 30
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 言語
@@ -1027,8 +1065,15 @@ SELECT_SCHEMA = {
                 "properties": {
                     "index": {"type": "integer"},
                     "category": {"type": "string", "enum": CATEGORIES},
+                    # AIフィードの絞り込み用。**選別と同じ1コールで取る**（R1）。
+                    # 区分（`category`）とは別物で、こちらは粒度が細かく複数付く
+                    "tags": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": TOPIC_IDS},
+                        "maxItems": MAX_TAGS,
+                    },
                 },
-                "required": ["index", "category"],
+                "required": ["index", "category", "tags"],
                 "additionalProperties": False,
             },
         }
@@ -1067,6 +1112,15 @@ one category:
 Include one or two `howto` items when the list contains good ones. Do not force it —
 if nothing today qualifies, publish none rather than picking a weak one.
 
+Also return `tags` for each item: 1 to {MAX_TAGS} ids from this list, most relevant first.
+
+{TOPIC_HINTS}
+
+Use ONLY ids from that list — never invent one. Tag what the item is actually about, not
+every subject it mentions in passing. **Do not pad to {MAX_TAGS}**: one precise tag is
+better than three loose ones, and a loose tag puts the item in front of a reader who
+asked for something else. Return an empty list only if genuinely nothing fits.
+
 Return fewer than {PICK_COUNT} if fewer are worth publishing. Do not pad the list."""
 
     data = _call(
@@ -1086,6 +1140,14 @@ Return fewer than {PICK_COUNT} if fewer are worth publishing. Do not pad the lis
             continue
         item = dict(candidates[index])
         item["category"] = pick.get("category") if pick.get("category") in CATEGORIES else "other"
+        # **表に無いタグは落とす。** スキーマで enum を掛けてあるので普通は通らないが、
+        # 通すとアプリ側でラベルの引けないタグが残り、絞り込みに一生引っかからない
+        tags, seen = [], set()
+        for tag in pick.get("tags") or []:
+            if tag in TOPIC_IDS and tag not in seen:
+                seen.add(tag)
+                tags.append(tag)
+        item["tags"] = tags[:MAX_TAGS]
         picked.append(item)
     return picked
 
@@ -1309,6 +1371,104 @@ def write_digest(db, doc_id, rows):
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# AIフィード（`ai_feed/{sha1}`）
+#
+# **同じ収集・選別・要約の結果を、もう1つの形で置くだけ。** 追加のAPI呼び出しは
+# ゼロなので、費用は増えない。日付で束ねた `sector_digest` は「その日のまとめ」を
+# 読ませる面、こちらは**利用者が選んだトピックだけ**を流す面で、束ね方が違う。
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+def feed_doc_id(url):
+    """設計メモ §3。**URLのSHA-1の先頭16文字。**
+
+    `url_hash`（SHA-256）とは別に持つ。あちらは `processed_urls` のIDで、
+    **すでに書かれたドキュメントのIDを変えられない**ので揃えられない。
+    """
+    return hashlib.sha1(url.encode("utf-8")).hexdigest()[:16]
+
+
+def to_feed_docs(picked, summaries, translations, now):
+    """`ai_feed` に入れる形にする。**アプリの `AIFeedItem` が読む形。**
+
+    ⚠️ **繁體中文のキーは `zh_Hant`。** 設計メモは `zhHant` と書いているが、
+    このリポジトリとアプリは既に `zh_Hant`（`TRANSLATED` / `SectorDigest.languageKeys`）で
+    通してある。**綴りを3つ目に増やすと、どれで書かれたか分からない項目がもう1つ増える。**
+    アプリ側は `zh_Hant` / `zh` / `zhHant` のどれでも読めるようにしてある。
+
+    **`title` は原文のまま置く**（設計メモの通り）。ただし訳した見出しは要約と
+    同じコールで既に手元にあるので、`titles` にも入れておく。入れないと、隣の
+    まとめの面が日本語の見出しなのに、フィードだけ英語の見出しが並ぶ。
+    """
+    docs = []
+    for i, item in enumerate(picked):
+        summary = summaries[i]
+        titles = {"ja": summary["title_ja"], "en": summary["title_en"]}
+        bodies = {"ja": summary["summary_ja"], "en": summary["summary_en"]}
+        for language, rows in translations.items():
+            titles[language] = rows[i]["title"]
+            bodies[language] = rows[i]["summary"]
+
+        # **`publishedAt` を必ず入れる。** アプリは `publishedAt` の降順で引くので、
+        # 欠けているドキュメントは索引に載らず、**画面に一生出てこない。**
+        # 日時を読めなかった記事も収集の窓の中にはあるので、いまの時刻に倒す
+        published = item.get("published_at") or now
+
+        doc = {
+            "kind": "news",
+            "title": item["title"],
+            "titles": titles,
+            "url": item["url"],
+            "source": item.get("source") or "",
+            "publishedAt": published,
+            "tags": item.get("tags", []),
+            "summary": bodies,
+            # 動画だけが持つ伸び率（設計メモ §4.3）。ニュースは0
+            "score": 0,
+            "createdAt": now,
+            "expiresAt": published + timedelta(days=AI_FEED_RETENTION_DAYS),
+            # まとめの面と同じ区分・銘柄も入れておく（同じ選別結果なので費用はかからない）
+            "category": item.get("category", "other"),
+            "tickers": item.get("tickers", []),
+        }
+        # **無い項目は書かない。** `thumbnailUrl: null` / `durationSec: null` を
+        # 置くと、アプリ側で「取得に失敗した」のか「もともと無い」のか区別できない
+        docs.append((feed_doc_id(item["url"]), doc))
+    return docs
+
+
+def write_ai_feed(db, docs):
+    """**書き込む前に存在を確かめる**（設計メモ §3）。
+
+    cronが二重に走っても、同じ記事が2つのドキュメントになることは無い（IDがURL由来）。
+    それでも上書きしないのは、**既に出ているものの内容を後から変えない**ため。
+    """
+    if not docs:
+        return 0
+
+    refs = [db.collection(AI_FEED_COLLECTION).document(doc_id) for doc_id, _ in docs]
+    existing = set()
+    try:
+        for i in range(0, len(refs), 200):
+            for doc in db.get_all(refs[i:i + 200]):
+                if doc.exists:
+                    existing.add(doc.id)
+    except Exception as e:
+        # 引けなくても止めない。**上書きになるだけ**で、重複はIDで防げている
+        print(f"  ai_feed の存在確認に失敗したので、そのまま書く: {e}")
+
+    added = [(doc_id, doc) for doc_id, doc in docs if doc_id not in existing]
+    if not added:
+        print("ai_feed に足すものが無い")
+        return 0
+
+    batch = db.batch()
+    for doc_id, doc in added:
+        batch.set(db.collection(AI_FEED_COLLECTION).document(doc_id), doc)
+    batch.commit()
+    return len(added)
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 取り込み
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -1344,6 +1504,7 @@ def main(db, client):
     if not dry_run:
         purge_expired(db, COLLECTION)
         purge_expired(db, PROCESSED_COLLECTION)
+        purge_expired(db, AI_FEED_COLLECTION)
 
     candidates = preprocess(collect(since), since)
     if not candidates:
@@ -1387,9 +1548,18 @@ def main(db, client):
     rows = to_rows(picked, summaries, translations)
     doc_id = now.astimezone(JST).strftime("%Y-%m-%d")
 
+    feed_docs = to_feed_docs(picked, summaries, translations, now)
+
     print(f"\n{doc_id} に {len(rows)} 件")
-    for row in rows:
-        print(f"  [{row['category']}] {row['ja']['title']}")
+    for row, (_, doc) in zip(rows, feed_docs):
+        tags = ",".join(doc["tags"]) or "-"
+        print(f"  [{row['category']}] {tags:34} {row['ja']['title']}")
+
+    # **タグが1つも付かなかった記事を黙って通さない。** フィードは
+    # タグでしか出し分けられないので、無タグの記事は誰の画面にも出ない
+    untagged = sum(1 for _, doc in feed_docs if not doc["tags"])
+    if untagged:
+        print(f"  ⚠️ タグの付かなかった記事が {untagged} 件（AIフィードには出ない）")
 
     if dry_run:
         print("\nDRY_RUN のため書き込みませんでした")
@@ -1397,8 +1567,11 @@ def main(db, client):
         return
 
     added = write_digest(db, doc_id, rows)
+    feed_added = write_ai_feed(db, feed_docs)
+    # **書き込みのあとに印を付ける。** 先に付けると、書き込みが落ちた日の記事が
+    # 「処理済み」として二度と拾われなくなる
     mark_processed(db, [r["url"] for r in rows])
-    print(f"書き込み {added} 件")
+    print(f"書き込み {added} 件 / ai_feed {feed_added} 件")
     report_cost(totals)
 
 
