@@ -198,6 +198,19 @@ PICK_COUNT = 8
 # **`processed_urls` があるので同じ記事を二度要約しない**ぶん、実際はこれより下がる。
 FEED_PICK_COUNT = 4
 
+# 現地語を1回に何件まで載せるか。**言語ごとに数える。**
+#
+# 選別に渡す枠（`LOCAL_RESERVED`）だけでは足りなかった。実測（2026-09-01）で
+# ja/ko/zh_Hant 各3件が選別まで届いたのに、**採用されたのは1件だけ**だった。
+# 英語の一次情報と同じ土俵で比べると、現地紙の記事はほぼ必ず負ける。
+# それでは韓国語・繁體中文の利用者の画面に現地の記事が1件も出ない。
+#
+# **英語の枠とは別に数える**ので、1回の実行で最大 `PICK_COUNT + 3 * LOCAL_PICK_COUNT`
+# 件になる。要約の費用はこの件数に比例する
+LOCAL_PICK_COUNT = 2
+# `--feed-only`（2時間おき）のときの現地語の枠
+FEED_LOCAL_PICK_COUNT = 1
+
 # 対象ティッカー。**記事に紐付ける表示用**で、取得の絞り込みには使わない
 TICKERS = {
     "NVIDIA": "NVDA",
@@ -1310,7 +1323,7 @@ SELECT_SCHEMA = {
 }
 
 
-def select(client, totals, candidates, limit=PICK_COUNT):
+def select(client, totals, candidates, limit=PICK_COUNT, local_limit=LOCAL_PICK_COUNT):
     """**40件を1コールで捌く（R1）。** 1件ずつ投げるとシステムプロンプトを40回払う"""
     lines = []
     for i, item in enumerate(candidates):
@@ -1328,8 +1341,16 @@ def select(client, totals, candidates, limit=PICK_COUNT):
 
 {chr(10).join(lines)}
 
-Choose at most {limit} items to publish, best first. For each, return its index and
-one category:
+Choose at most {limit} of the English items to publish, best first.
+
+**The items marked `[ja local]`, `[ko local]` and `[zh_Hant local]` have their own slots
+and do not compete with the English ones.** Choose up to {local_limit} for each language
+that appears. Do not skip a language just because the English items are stronger — these
+are shown to a different reader. Apply the same bar within the language: it earns its
+slot by covering something the English list does not. If nothing in a language qualifies,
+return none for it.
+
+For each item you choose, return its index and one category:
 
   chip    = semiconductors, fabs, capacity, memory, packaging, hardware supply
   model   = AI models, research results, capability or benchmark news
@@ -1362,13 +1383,21 @@ Return fewer than {limit} if fewer are worth publishing. Do not pad the list."""
         return []
 
     picked = []
-    for pick in data.get("picks", [])[:limit]:
+    # **枠は言語ごとに数える。** 上限を全体で1つにすると、英語の枠を現地語が
+    # 食う（逆も同じ）。プロンプトでも分けて指示してあるが、**モデルの数え方を
+    # 信じない**（範囲外の番号を信じないのと同じ理由）
+    counts = {}
+    for pick in data.get("picks", []):
         index = pick.get("index")
         # **範囲外の番号を信じない。** 出てきた番号がずれていると別の記事を載せる
         if not isinstance(index, int) or not (0 <= index < len(candidates)):
             print(f"    選別が範囲外の番号を返した: {index}")
             continue
         item = dict(candidates[index])
+        bucket = item["lang"] if is_local(item) else LANG_GLOBAL
+        if counts.get(bucket, 0) >= (limit if bucket == LANG_GLOBAL else local_limit):
+            continue
+        counts[bucket] = counts.get(bucket, 0) + 1
         item["category"] = pick.get("category") if pick.get("category") in CATEGORIES else "other"
         # **表に無いタグは落とす。** スキーマで enum を掛けてあるので普通は通らないが、
         # 通すとアプリ側でラベルの引けないタグが残り、絞り込みに一生引っかからない
@@ -1448,7 +1477,7 @@ Write the Japanese natively — it must not read like a translation. Return exac
     return rows
 
 
-def translate(client, totals, language, name, rows):
+def translate(client, totals, language, name, rows, _retry=True):
     """**元記事ではなく、出来上がった英語の要約を訳す（R3）。**
 
     入力が1/3になり、単価も1/3になる。翻訳は要約より簡単なのでHaikuで足りる。
@@ -1477,6 +1506,13 @@ Return exactly {len(rows)} items, in the same order, each with a `title` and a `
     items = data.get("items", [])
     if len(items) != len(rows):
         print(f"    {language} の翻訳の件数がずれた: {len(items)} / {len(rows)}")
+        # **多い側を切り詰めて使わない。** 途中で1件が2件に割れていると、
+        # 以降の訳が1つずつずれて**別の記事に別の要約が付く**。
+        # 英語に倒れるより悪いので、数が合わないものは丸ごと捨てる。
+        # ただし**捨てる前に1回やり直す**（実測でこのずれは散発的に起きる）
+        if _retry:
+            print(f"    {language} をもう一度訳す")
+            return translate(client, totals, language, name, rows, _retry=False)
         return None
     return items
 
@@ -1744,8 +1780,9 @@ def main(db, client, feed_only=False):
     since = now - timedelta(hours=LOOKBACK_HOURS)
     dry_run = os.environ.get("DRY_RUN") == "1"
     limit = FEED_PICK_COUNT if feed_only else PICK_COUNT
+    local_limit = FEED_LOCAL_PICK_COUNT if feed_only else LOCAL_PICK_COUNT
     label = "フィードのみ" if feed_only else "まとめ＋フィード"
-    print(f"実行: {label}（最大 {limit} 件）\n")
+    print(f"実行: {label}（英語 最大 {limit} 件 ＋ 現地語 各 {local_limit} 件）\n")
 
     # **取り込みより先に掃除する。** 取り込みが途中で落ちても掃除は済んでいる
     if not dry_run:
@@ -1766,7 +1803,7 @@ def main(db, client, feed_only=False):
         return
 
     print("選別")
-    picked = select(client, totals, fresh, limit=limit)
+    picked = select(client, totals, fresh, limit=limit, local_limit=local_limit)
     if not picked:
         print("載せるものが無いので中止")
         report_cost(totals)
