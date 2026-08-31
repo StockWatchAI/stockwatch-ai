@@ -1066,11 +1066,17 @@ SELECT_SCHEMA = {
                     "index": {"type": "integer"},
                     "category": {"type": "string", "enum": CATEGORIES},
                     # AIフィードの絞り込み用。**選別と同じ1コールで取る**（R1）。
-                    # 区分（`category`）とは別物で、こちらは粒度が細かく複数付く
+                    # 区分（`category`）とは別物で、こちらは粒度が細かく複数付く。
+                    #
+                    # ⚠️ **`maxItems` を書かないこと。** structured output のスキーマは
+                    # 配列の `maxItems` に対応しておらず、**コールが400で丸ごと落ちる**
+                    # （実測 2026-08-31: `For 'array' type, property 'maxItems' is not
+                    # supported`）。選別が落ちるとまとめの面ごと中止になるので、
+                    # **AIフィードだけでなく既存の配信も止まる。**
+                    # 上限はプロンプトで伝え、`select` 側で切る
                     "tags": {
                         "type": "array",
                         "items": {"type": "string", "enum": TOPIC_IDS},
-                        "maxItems": MAX_TAGS,
                     },
                 },
                 "required": ["index", "category", "tags"],
