@@ -1,0 +1,161 @@
+{
+  "_note": [
+    "AIフィードのトピック語彙。**bot と iOS アプリの両方がこの表を読む。**",
+    "正はこのファイル（stockwatch-ai/scripts/topics.json）。アプリ側の",
+    "`Test Stock20260208/topics.json` は同じ中身の写しで、バンドルに載せて使う。",
+    "**片方だけ変えない。** IDが食い違うと、botが付けたタグにアプリのラベルが",
+    "見つからず、そのタグだけ画面から消える（記事は消えない）。",
+    "",
+    "**IDは増やさない・変えない。** 語彙はクローズドで、LLMにはこのIDリストから",
+    "しか選ばせない（自由生成させると表記ゆれで一致しなくなる）。追加は人の判断でのみ。",
+    "IDを変えると、利用者が `users/{uid}/prefs/aiFeed` に保存した選択が無効になる。",
+    "",
+    "labels … 画面に出す名前。4言語すべて埋める（欠けると英語に倒れる）",
+    "query  … YouTube検索に投げる英語のクエリ（フェーズ5）",
+    "hint   … タグ付けのプロンプトに入れる説明。英語1行",
+    "group  … 曜日ローテーションの組（0〜3）。search.list のクォータ対策（フェーズ5）"
+  ],
+  "version": 1,
+  "topics": [
+    {
+      "id": "ai_agent",
+      "labels": { "ja": "AIエージェント", "en": "AI Agents", "zh_Hant": "AI 代理", "ko": "AI 에이전트" },
+      "query": "AI agents",
+      "hint": "autonomous agents, tool use, agentic workflows, computer use",
+      "group": 0
+    },
+    {
+      "id": "coding_ai",
+      "labels": { "ja": "コーディングAI", "en": "AI Coding", "zh_Hant": "AI 程式開發", "ko": "AI 코딩" },
+      "query": "AI coding assistant",
+      "hint": "coding assistants, code generation, software engineering with AI",
+      "group": 1
+    },
+    {
+      "id": "llm_release",
+      "labels": { "ja": "新モデル登場", "en": "New Models", "zh_Hant": "新模型發布", "ko": "신규 모델" },
+      "query": "new AI model release",
+      "hint": "a new model or major version is announced or released",
+      "group": 2
+    },
+    {
+      "id": "openai",
+      "labels": { "ja": "OpenAI", "en": "OpenAI", "zh_Hant": "OpenAI", "ko": "OpenAI" },
+      "query": "OpenAI",
+      "hint": "OpenAI the company: products, business, people, deals",
+      "group": 3
+    },
+    {
+      "id": "anthropic",
+      "labels": { "ja": "Anthropic", "en": "Anthropic", "zh_Hant": "Anthropic", "ko": "Anthropic" },
+      "query": "Anthropic Claude",
+      "hint": "Anthropic the company: products, business, people, deals",
+      "group": 3
+    },
+    {
+      "id": "google_ai",
+      "labels": { "ja": "Google / Gemini", "en": "Google / Gemini", "zh_Hant": "Google / Gemini", "ko": "Google / Gemini" },
+      "query": "Google Gemini AI",
+      "hint": "Google, DeepMind and Gemini",
+      "group": 3
+    },
+    {
+      "id": "opensource_llm",
+      "labels": { "ja": "オープンソースLLM", "en": "Open-source LLM", "zh_Hant": "開源 LLM", "ko": "오픈소스 LLM" },
+      "query": "open source LLM",
+      "hint": "open-weight models, Llama, Mistral, Qwen, DeepSeek, Hugging Face releases",
+      "group": 3
+    },
+    {
+      "id": "semiconductor",
+      "labels": { "ja": "半導体・GPU", "en": "Semiconductors", "zh_Hant": "半導體、GPU", "ko": "반도체·GPU" },
+      "query": "AI chips GPU",
+      "hint": "chips, GPUs, accelerators, fabs, packaging, HBM, foundry capacity",
+      "group": 0
+    },
+    {
+      "id": "datacenter",
+      "labels": { "ja": "データセンター・電力", "en": "Data Centers", "zh_Hant": "資料中心、電力", "ko": "데이터센터·전력" },
+      "query": "AI data center power",
+      "hint": "data center buildout, capex, electricity and cooling for AI",
+      "group": 1
+    },
+    {
+      "id": "china_ai",
+      "labels": { "ja": "中国AI・輸出規制", "en": "China AI", "zh_Hant": "中國 AI、出口管制", "ko": "중국 AI·수출규제" },
+      "query": "China AI chip export controls",
+      "hint": "Chinese AI companies and chips, export controls, sanctions",
+      "group": 2
+    },
+    {
+      "id": "robotics",
+      "labels": { "ja": "ロボット・フィジカルAI", "en": "Robotics", "zh_Hant": "機器人、實體 AI", "ko": "로봇·피지컬 AI" },
+      "query": "AI robotics humanoid",
+      "hint": "robots, humanoids, autonomous vehicles, embodied AI",
+      "group": 2
+    },
+    {
+      "id": "genmedia",
+      "labels": { "ja": "画像・動画生成", "en": "Image & Video Gen", "zh_Hant": "影像、影片生成", "ko": "이미지·영상 생성" },
+      "query": "AI image video generation",
+      "hint": "image, video, 3D and music generation models and tools",
+      "group": 0
+    },
+    {
+      "id": "voice_ai",
+      "labels": { "ja": "音声AI", "en": "Voice AI", "zh_Hant": "語音 AI", "ko": "음성 AI" },
+      "query": "AI voice speech",
+      "hint": "speech recognition, text to speech, voice agents, real-time audio",
+      "group": 1
+    },
+    {
+      "id": "ai_funding",
+      "labels": { "ja": "資金調達・M&A", "en": "Funding & M&A", "zh_Hant": "募資、併購", "ko": "투자·M&A" },
+      "query": "AI startup funding round",
+      "hint": "funding rounds, valuations, acquisitions, investment commitments",
+      "group": 0
+    },
+    {
+      "id": "ai_enterprise",
+      "labels": { "ja": "企業の導入事例", "en": "Enterprise Adoption", "zh_Hant": "企業導入案例", "ko": "기업 도입 사례" },
+      "query": "enterprise AI adoption",
+      "hint": "a named company putting AI into production, and what it learned",
+      "group": 1
+    },
+    {
+      "id": "ai_regulation",
+      "labels": { "ja": "規制・訴訟", "en": "Regulation", "zh_Hant": "法規、訴訟", "ko": "규제·소송" },
+      "query": "AI regulation law",
+      "hint": "laws, rules, government action, copyright and other lawsuits",
+      "group": 2
+    },
+    {
+      "id": "ai_research",
+      "labels": { "ja": "論文・研究", "en": "Research", "zh_Hant": "論文、研究", "ko": "논문·연구" },
+      "query": "AI research paper",
+      "hint": "papers, benchmarks, interpretability, new techniques",
+      "group": 0
+    },
+    {
+      "id": "devtools",
+      "labels": { "ja": "開発ツール・MCP", "en": "Dev Tools", "zh_Hant": "開發工具、MCP", "ko": "개발 도구·MCP" },
+      "query": "AI developer tools MCP",
+      "hint": "SDKs, frameworks, MCP, evals, observability, inference serving",
+      "group": 1
+    },
+    {
+      "id": "ai_hardware",
+      "labels": { "ja": "AIデバイス", "en": "AI Hardware", "zh_Hant": "AI 裝置", "ko": "AI 기기" },
+      "query": "AI hardware device",
+      "hint": "consumer AI devices: phones, glasses, wearables, on-device AI",
+      "group": 2
+    },
+    {
+      "id": "ai_market",
+      "labels": { "ja": "AI関連株の動き", "en": "AI Stocks", "zh_Hant": "AI 概念股", "ko": "AI 관련주" },
+      "query": "AI stocks earnings",
+      "hint": "earnings, guidance and market moves of AI-related listed companies",
+      "group": 3
+    }
+  ]
+}

@@ -6,8 +6,14 @@
     python3 scripts/sector_digest.py             # 収集→選別→要約→翻訳→Firestoreへ書く
 
 アプリ側は `SectorDigest.swift` / `SectorNewsView.swift` が `sector_digest/{YYYY-MM-DD}`
-を読み、「セクター」タブに出す。**銘柄に紐付かない唯一の面**で、ウォッチリストが
+を読み、「ニュース」タブに出す。**銘柄に紐付かない唯一の面**で、ウォッチリストが
 0件の利用者にも同じものが出る。
+
+**同じ結果を `ai_feed/{sha1}` にも1件1ドキュメントで書く**（設計メモ `ai-feed-spec.md`）。
+まとめの面が「その日の8件」を日付で束ねて読ませるのに対し、AIフィードは
+**利用者が `topics.json` の20タグから選んだトピックだけ**を流す面で、束ね方が違う。
+収集・選別・要約は**同じ1回ぶんを使い回す**ので、APIの呼び出しは1つも増えていない
+（タグ付けは選別と同じコールで取る）。
 
 **全利用者で同じ1ドキュメントを読む。** 内容が利用者ごとに変わらないので、APIの費用が
 利用者数に比例しない。**無料で出せる根拠はここ。** 「利用者ごとにパーソナライズ」を
@@ -176,6 +182,35 @@ MAX_CANDIDATES = 40
 # 実際に載せる件数。業界の動きと使い方の両方を入れるので、企業名で引いていた頃より広げてある
 PICK_COUNT = 8
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# フィードだけを更新する実行（`--feed-only`）
+#
+# **まとめは1日1回のままにする。** `sector_digest/{YYYY-MM-DD}` は「その日の8件」を
+# 読ませる面で、アプリは1日ぶん12件までしか出さない（`SectorDigest.newsLimitPerDay`）。
+# ここに2時間おきで足すと、**朝の8件が枠を埋めたまま夕方の記事が一生出ない**
+# （`write_digest` は後ろに足すので、古いものから12件になる）。
+#
+# AIフィードは `publishedAt` の降順で引く別の面なので、足したぶんがそのまま前に出る。
+# **`--feed-only` は `ai_feed` にだけ書き、まとめには触らない。**
+#
+# 1回あたり4件に絞ってある。実測で1回 $0.0385（8件・朝の満杯の状態）なので、
+# 4件なら $0.02 前後。2時間おき11回で1日 $0.2、月 $6 ほど。
+# **`processed_urls` があるので同じ記事を二度要約しない**ぶん、実際はこれより下がる。
+FEED_PICK_COUNT = 4
+
+# 現地語を1回に何件まで載せるか。**言語ごとに数える。**
+#
+# 選別に渡す枠（`LOCAL_RESERVED`）だけでは足りなかった。実測（2026-09-01）で
+# ja/ko/zh_Hant 各3件が選別まで届いたのに、**採用されたのは1件だけ**だった。
+# 英語の一次情報と同じ土俵で比べると、現地紙の記事はほぼ必ず負ける。
+# それでは韓国語・繁體中文の利用者の画面に現地の記事が1件も出ない。
+#
+# **英語の枠とは別に数える**ので、1回の実行で最大 `PICK_COUNT + 3 * LOCAL_PICK_COUNT`
+# 件になる。要約の費用はこの件数に比例する
+LOCAL_PICK_COUNT = 2
+# `--feed-only`（2時間おき）のときの現地語の枠
+FEED_LOCAL_PICK_COUNT = 1
+
 # 対象ティッカー。**記事に紐付ける表示用**で、取得の絞り込みには使わない
 TICKERS = {
     "NVIDIA": "NVDA",
@@ -235,6 +270,108 @@ QUERIES = [
 
 GOOGLE_NEWS = "https://news.google.com/rss/search"
 
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 現地語のニュース（日本・韓国・台湾／香港）
+#
+# **上の `QUERIES` は `hl=en-US` で引いている。** つまり非英語の記事は「弾いている」
+# のではなく**最初から取りに行っていない**（実測 2026-08-31 で、3,761件のうち
+# 「英語以外」として落ちたのは25件だけだった）。現地の記事が欲しければ、
+# ロケールを変えて別に引くしかない。
+#
+# **英語の面が薄いところを埋めるために入れる。** Rapidus・キオクシア・SKハイニックス・
+# 聯電あたりの現地の一次情報は、英語媒体だとほとんど流れてこない。
+#
+# ⚠️ **現地語の記事は `ai_feed` にだけ入れ、`sector_digest`（まとめ）には入れない。**
+# まとめの面には出し分けの仕組みが無く、**既に配信済みの2.2を使っている人は
+# アプリを更新しても絞れない**（韓国の国内話題が日本語に訳されて並ぶ）。
+# フィードは記事ごとに `lang` を持ち、アプリが読む言語で絞る。
+#
+# **クエリは半導体・AIの話題に寄せてある。** 現地の株式市場の話題まで広げると
+# 「株価予想」系が増え、言語ごとに除外の見出しパターンを作る話になる。
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+LOCALES = {
+    # キーは `topics.json` / アプリの `contentLanguageKeys` と同じ綴りにする
+    "ja": {
+        "label": "日本",
+        "params": {"hl": "ja", "gl": "JP", "ceid": "JP:ja"},
+        "queries": [
+            "AI 半導体", "半導体 工場", "半導体 装置",
+            "生成AI 企業", "AIエージェント 業務", "データセンター 電力",
+        ],
+    },
+    "ko": {
+        "label": "韓国",
+        "params": {"hl": "ko", "gl": "KR", "ceid": "KR:ko"},
+        "queries": [
+            "AI 반도체", "반도체 공장", "HBM 메모리",
+            "생성형 AI 기업", "AI 에이전트 도입", "데이터센터 전력",
+        ],
+    },
+    "zh_Hant": {
+        "label": "台湾・香港",
+        "params": {"hl": "zh-TW", "gl": "TW", "ceid": "TW:zh-Hant"},
+        "queries": [
+            "AI 晶片", "半導體 製程", "先進封裝",
+            "生成式 AI 企業", "AI 代理 應用", "資料中心 電力",
+        ],
+    },
+}
+
+# 英語由来の記事に入れる言語。**`lang` が無い古いドキュメントもこれとして扱う**
+LANG_GLOBAL = "en"
+
+# 現地語のキーワード。**ラテン文字の `KEYWORDS` は使えない。**
+# 語の境界（`(?<![a-z0-9])`）で照合しているが、日本語・中国語には語の境界が無い。
+# ここは素直な部分一致で見る（現地語の側は、そもそもクエリで絞り込んである）
+LOCAL_KEYWORDS = {
+    "ja": [
+        "半導体", "チップ", "ウエハ", "ウェハ", "露光", "ファウンドリ", "パッケージ",
+        "メモリ", "データセンター", "人工知能", "生成AI", "エージェント", "推論",
+        "大規模言語モデル", "ラピダス", "キオクシア", "東京エレクトロン", "ソシオネクスト",
+        "エヌビディア", "サムスン", "ハイニックス", "台積電", "アドバンテスト",
+    ],
+    "ko": [
+        "반도체", "칩", "웨이퍼", "노광", "파운드리", "패키징", "메모리", "데이터센터",
+        "인공지능", "생성형", "에이전트", "추론", "거대언어모델", "하이닉스", "삼성전자",
+        "엔비디아", "마이크론", "소부장",
+    ],
+    "zh_Hant": [
+        "半導體", "晶片", "晶圓", "微影", "代工", "封裝", "記憶體", "資料中心",
+        "人工智慧", "生成式", "代理", "推論", "大型語言模型", "台積電", "聯電",
+        "輝達", "三星", "美光", "先進製程",
+    ],
+}
+
+# 現地の主要紙。**英語の `news_sources.DEFAULT_ALLOWED` と同じ役割**で、
+# 落とすためではなく点数を上げるために使う（表に無い良い媒体を消さない）
+LOCAL_MAJOR = {
+    "ja": [
+        "日本経済新聞", "日経", "朝日新聞", "読売新聞", "毎日新聞", "産経新聞",
+        "時事通信", "共同通信", "NHK", "東洋経済", "ダイヤモンド", "日刊工業新聞",
+        "ITmedia", "EE Times", "マイナビ", "Impress", "PC Watch", "TECH+",
+    ],
+    "ko": [
+        "한국경제", "매일경제", "조선일보", "중앙일보", "동아일보", "연합뉴스",
+        "전자신문", "디지털타임스", "서울경제", "이데일리", "ZDNet",
+    ],
+    "zh_Hant": [
+        "經濟日報", "工商時報", "中央社", "聯合報", "自由時報", "天下雜誌",
+        "數位時代", "科技新報", "DIGITIMES", "鉅亨網", "財訊", "商業周刊",
+    ],
+}
+
+# 現地語の「株価予想」系。**英語の `JUNK_TITLE` と同じ役割。**
+# クエリを半導体・AIに寄せてあるので数は少ないが、素通りさせると
+# 助言に見える見出しがフィードに並ぶ
+LOCAL_JUNK = {
+    "ja": ["株価予想", "買うべき", "狙い目", "急騰", "爆上げ", "おすすめ銘柄",
+           "注目銘柄", "儲か", "億り人", "テンバガー"],
+    "ko": ["주가 전망", "주가전망", "사야", "급등", "추천주", "유망주", "대박"],
+    "zh_Hant": ["股價預測", "該買", "飆漲", "推薦股", "明牌", "抱緊", "賺翻"],
+}
+
 # 各社のIR。**実測で通ったものだけ入れてある**（上のdocstringに全部の結果がある）。
 # 落ちても他の取得は続ける作りなので、増やすときは `--inspect` で件数を見てから
 IR_FEEDS = {
@@ -292,6 +429,38 @@ KEYWORDS = [
 # 区分。**アプリの `SectorCategory` と文字列を揃える。**
 # アプリは知らない値を `.other` に倒すので、ここを増やしてもアプリは壊れない
 CATEGORIES = ["chip", "model", "funding", "policy", "product", "howto"]
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# AIフィードのトピック語彙（`topics.json`）
+#
+# `sector_digest/{YYYY-MM-DD}` は「その日の8件」を日付で束ねた面だが、AIフィードは
+# **利用者が選んだトピックだけを流す面**なので、記事1件＝1ドキュメントで
+# `ai_feed/{sha1}` にも書く。収集・選別・要約は上と**同じ1回ぶんを使い回す**。
+#
+# **収集を利用者ごとに回さない。** 出し分けはアプリ側でやる。ここを崩すと
+# APIの費用が利用者数に比例する（`sector_digest` を無料で出せている前提そのもの）。
+#
+# **タグはこの表のIDしか使わない。** LLMに自由生成させると表記ゆれで一致しなくなる。
+# 表はアプリ側（`Test Stock20260208/topics.json`）にも同じ中身の写しがある。
+# **片方だけ変えない**（IDが食い違うとアプリでラベルが引けず、そのタグだけ消える）。
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+TOPICS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "topics.json")
+
+with open(TOPICS_PATH, encoding="utf-8") as _f:
+    TOPICS = json.load(_f)["topics"]
+
+TOPIC_IDS = [t["id"] for t in TOPICS]
+# 選別のプロンプトに入れる説明。**IDと1行の説明だけ**（ラベルは4言語ぶんあって長い）
+TOPIC_HINTS = "\n".join(f"  {t['id']:16} {t['hint']}" for t in TOPICS)
+
+AI_FEED_COLLECTION = "ai_feed"
+# 1件に付けるタグの上限。**埋めさせない**（薄いタグを足すと絞り込みの精度が落ちる）
+MAX_TAGS = 3
+# 設計メモ §3。`publishedAt` が30日より古いものを消す。
+# **FirestoreのTTLポリシーはSparkプランで使えない**ので、`expiresAt` を自分で入れて
+# `purge_expired` に片付けさせる（`sector_digest` / `news` と同じ流儀）
+AI_FEED_RETENTION_DAYS = 30
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 言語
@@ -500,6 +669,32 @@ def collect_feeds(feeds, origin, label, suffix=""):
     return items
 
 
+def collect_google_news_local():
+    """現地語のGoogleニュース。**ロケールごとに `hl` / `gl` / `ceid` を変えて引く。**
+
+    `origin` は `google_news_local`、`lang` にロケールのキーを入れる。
+    以降の前処理は `lang` を見て、英語前提の判定を飛ばす。
+    """
+    items = []
+    for lang, locale in LOCALES.items():
+        for query in locale["queries"]:
+            params = dict(locale["params"], q=query)
+            try:
+                res = fetch(GOOGLE_NEWS, params=params)
+                picked = parse_feed(res.content)
+            except RuntimeError as e:
+                print(f"  {locale['label']}「{query}」: 取得に失敗したので飛ばす {e}")
+                continue
+            for item in picked:
+                item["title"] = _GOOGLE_SUFFIX.sub("", item["title"]).strip()
+                item["origin"] = "google_news_local"
+                item["lang"] = lang
+                item["query"] = query
+            print(f"  {locale['label']}「{query}」: {len(picked)} 件")
+            items.extend(picked)
+    return items
+
+
 def collect_ir():
     return collect_feeds(IR_FEEDS, "ir", "IR", suffix=" IR")
 
@@ -621,12 +816,22 @@ def non_latin_ratio(text):
     return sum(1 for c in letters if NON_LATIN.match(c)) / len(letters)
 
 
+def is_local(item):
+    """現地語のロケールから取ってきた記事か（`LOCALES` 由来）"""
+    return item.get("lang") in LOCALES
+
+
 def is_english(item):
     """英語の記事か。**見出し・本文・配信元の3か所を見る。**
 
     配信元まで見るのは、実測で残った3件が
     **「見出しも本文も英語だが、媒体が現地語」**という形だったため。
+
+    **現地語のロケールから取ってきたものには掛けない。** あちらは非英語であることが
+    分かったうえで取りに行っているので、ここで落とすと収集した意味が無くなる。
     """
+    if is_local(item):
+        return True
     if non_latin_ratio(item["title"]) > NON_LATIN_LIMIT:
         return False
     if non_latin_ratio(item.get("description")) > NON_LATIN_LIMIT:
@@ -642,6 +847,11 @@ SCORE_IR = 100
 SCORE_PRACTICE = 80
 SCORE_MAJOR = 50
 SCORE_HN = 20
+# 現地の主要紙（`LOCAL_MAJOR`）。英語の主要紙と同じ重みにする
+SCORE_LOCAL_MAJOR = 50
+# 表に無い現地の媒体。**0にしない。** 表は網羅していないので、0にすると
+# 良い記事が枠の取り合いで必ず負ける（英語側でホワイトリストを使わない理由と同じ）
+SCORE_LOCAL = 30
 
 # 一次情報のために必ず空けておく枠。点数が低くても、IRは最低これだけ選別に回す。
 # **これが無いと、Googleニュースの物量にIRが常に負ける**（実測で50件すべて落ちた）
@@ -650,6 +860,12 @@ IR_RESERVED = 5
 # 使い方の記事のために空けておく枠。**これが無いと業界ニュースの物量に負ける**
 # （実測で、使い方らしい候補8件のうち40件に届いたのは2件だった）
 HOWTO_RESERVED = 8
+
+# 現地語の記事のためにロケールごとに空けておく枠。
+# **これが無いと英語の物量に必ず負ける**（英語のクエリ16本 × 100件に対して、
+# 現地語は6本ずつしかない）。3言語 × 3件で、40件のうち9件まで。
+# 逆に大きくすると、英語の一次情報が押し出される
+LOCAL_RESERVED = 3
 
 # 使い方・実務らしい見出し。**点数ではなく枠の確保に使う**
 PRACTICAL_TITLE = re.compile(
@@ -676,7 +892,15 @@ def score(item):
         return SCORE_PRACTICE
     if origin == "hacker_news":
         return SCORE_HN
-    source = item.get("source")
+    source = item.get("source") or ""
+
+    # 現地語の記事は `news_sources` では判断できない（あの表は英語の
+    # コンテンツファームを相手にしていて、現地の媒体について何も言えない）。
+    # **ロケールごとの主要紙の表で見る**（`LOCAL_MAJOR`）
+    if is_local(item):
+        majors = LOCAL_MAJOR.get(item["lang"], [])
+        return SCORE_LOCAL_MAJOR if any(m in source for m in majors) else SCORE_LOCAL
+
     # **`is_allowed` をそのまま使わない。** あれはラテン文字を含まない配信元を
     # 「判断できないので通す」で True にする（`news_sources` の設計）。
     # 落とす判定にはそれで正しいが、**点数に使うと現地語の媒体がすべて
@@ -690,6 +914,11 @@ def is_excluded(item):
     """落とすもの。**除外リストと見出しの型だけ**で、ホワイトリスト漏れでは落とさない"""
     if JUNK_TITLE.search(item["title"]):
         return "見出しの型"
+    # 現地語の「株価予想」系。**英語の `JUNK_TITLE` は当たらない**
+    if is_local(item):
+        junk = LOCAL_JUNK.get(item["lang"], [])
+        if any(j in item["title"] for j in junk):
+            return "見出しの型"
     source = news_sources.normalize(item.get("source"))
     for name in news_sources.KNOWN_EXCLUDED:
         if source and source.startswith(news_sources.normalize(name)):
@@ -707,8 +936,20 @@ _STOPWORDS = {
 }
 
 
+# **CJKは空白で語を切れない。** 日本語・中国語の見出しを `_WORD` に掛けると
+# ラテン文字部分しか残らず、たいてい空集合になる。空集合どうしの重なりは0なので
+# **`dedupe_similar` が一切効かなくなり、同じ発表が5件並ぶ**（英語側で実測した通り）。
+# 2文字ずつの並び（バイグラム）で見れば、語を切らずに重なりを測れる。
+# ハングルは空白で切れるが、ここでも同じ扱いで問題ない
+_CJK = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]+")
+
+
 def words(title):
-    return {w for w in _WORD.findall(title.lower()) if w not in _STOPWORDS and len(w) > 2}
+    tokens = {w for w in _WORD.findall(title.lower())
+              if w not in _STOPWORDS and len(w) > 2}
+    for run in _CJK.findall(title):
+        tokens.update(run[i:i + 2] for i in range(len(run) - 1))
+    return tokens
 
 
 def dedupe_similar(items):
@@ -767,7 +1008,20 @@ KEYWORD_RE = re.compile(
 
 
 def has_keyword(item):
-    return bool(KEYWORD_RE.search(f"{item['title']} {item.get('description', '')}"))
+    """見出し・本文に業界の語が1つも無ければ落とす。
+
+    **現地語は `KEYWORD_RE` で照合できない。** あの正規表現は語の境界
+    （`(?<![a-z0-9])`）で見ているが、日本語と中国語には語の境界が無い。
+    `LOCAL_KEYWORDS` の素直な部分一致で見る（現地語側はクエリで既に絞ってある）。
+    """
+    text = f"{item['title']} {item.get('description', '')}"
+    if is_local(item):
+        keywords = LOCAL_KEYWORDS.get(item["lang"], [])
+        if any(k in text for k in keywords):
+            return True
+        # `NVIDIA` `HBM` のようにラテン文字で書かれることも多いので、英語側も見る
+        return bool(KEYWORD_RE.search(text))
+    return bool(KEYWORD_RE.search(text))
 
 
 def tickers_for(item):
@@ -854,10 +1108,14 @@ def preprocess(items, since):
 
     take([i for i in kept if i.get("origin") == "ir"], IR_RESERVED)
     take([i for i in kept if looks_practical(i)], HOWTO_RESERVED)
+    # **ロケールごとに別々に取る。** まとめて `LOCAL_RESERVED * 3` にすると、
+    # 点数順に並んでいるぶん記事数の多い言語が枠を独占する
+    for lang in LOCALES:
+        take([i for i in kept if i.get("lang") == lang], LOCAL_RESERVED)
     # 残りは業界のニュースで埋める。**IRと使い方はもう上限まで入っている**ので、
     # ここでは点数の高い順＝通信社・主要紙から入る
     take([i for i in kept
-          if i.get("origin") != "ir" and not looks_practical(i)],
+          if i.get("origin") != "ir" and not looks_practical(i) and not is_local(i)],
          MAX_CANDIDATES - len(picked))
 
     selected = picked[:MAX_CANDIDATES]
@@ -872,6 +1130,8 @@ def preprocess(items, since):
     print(f"          うちIR: {sum(1 for i in selected if i.get('origin') == 'ir')} 件 / "
           f"使い方らしいもの: {sum(1 for i in selected if looks_practical(i))} 件 / "
           f"通信社・主要紙: {sum(1 for i in selected if i['score'] == SCORE_MAJOR)} 件")
+    local_counts = {lang: sum(1 for i in selected if i.get("lang") == lang) for lang in LOCALES}
+    print(f"          現地語: {local_counts}（0が続くならクエリかキーワードを疑う）")
     return selected
 
 
@@ -914,6 +1174,14 @@ The digest covers two kinds of item, and a good day has both:
 industry is going, not to follow particular firms. If several items are about the same
 company, keep the strongest one and spend the remaining slots elsewhere.
 
+**Some items are in Japanese, Korean or Traditional Chinese**, marked `[ja local]`,
+`[ko local]` or `[zh_Hant local]`. They come from local outlets and are shown only to
+readers of that language, so they are judged on their own merit — not against the
+English items, and never dropped for being in another language. What earns a local item
+a slot is covering something the English press does not: a domestic fab, a supplier, a
+government programme, a named company's own announcement. Drop one that merely
+re-reports a story already in the English list.
+
 Drop near-duplicates: if several items cover the same announcement, keep only the one
 with the most substantial source.
 
@@ -924,6 +1192,10 @@ a stock-watching app.
 
 Write for a reader who follows the industry but is not an engineer. Lead with what
 actually happened and the concrete numbers. No preamble, no "in a recent announcement".
+
+**The source may be in Japanese, Korean or Traditional Chinese, not only English.**
+Write the Japanese and English summaries from whatever language the item is in. Do not
+translate word for word — write each one as a native speaker would.
 
 {NO_ADVICE}"""
 
@@ -1017,34 +1289,61 @@ def _call(client, totals, *, model, system, prompt, max_tokens, schema, _retry=T
     return None
 
 
-SELECT_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "picks": {
-            "type": "array",
-            "items": {
+# 1件ぶんの形。英語と現地語で同じものを使う
+_PICK_ITEM = {
                 "type": "object",
                 "properties": {
                     "index": {"type": "integer"},
                     "category": {"type": "string", "enum": CATEGORIES},
+                    # AIフィードの絞り込み用。**選別と同じ1コールで取る**（R1）。
+                    # 区分（`category`）とは別物で、こちらは粒度が細かく複数付く。
+                    #
+                    # ⚠️ **`maxItems` を書かないこと。** structured output のスキーマは
+                    # 配列の `maxItems` に対応しておらず、**コールが400で丸ごと落ちる**
+                    # （実測 2026-08-31: `For 'array' type, property 'maxItems' is not
+                    # supported`）。選別が落ちるとまとめの面ごと中止になるので、
+                    # **AIフィードだけでなく既存の配信も止まる。**
+                    # 上限はプロンプトで伝え、`select` 側で切る
+                    "tags": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": TOPIC_IDS},
+                    },
                 },
-                "required": ["index", "category"],
+                "required": ["index", "category", "tags"],
                 "additionalProperties": False,
-            },
-        }
+}
+
+# **英語と現地語を別のフィールドで返させる。**
+#
+# 最初は1つの `picks` にまとめ、「英語は最大N件・現地語は言語ごとに最大M件」と
+# 文章で指示していた。**実測（2026-09-01）で2回続けて現地語が0件になった**
+# （同じ候補でフル実行のときは3件採っている）。1つの配列だと、英語の候補が
+# 強いぶんそちらで埋まって現地語まで意識が回らない。
+#
+# **フィールドを分けて両方 required にすると、モデルは現地語のぶんを
+# 別に考えざるを得なくなる。** 空配列を返す自由は残してある
+# （その日に載せるものが無ければ0件で正しい）。
+SELECT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "picks": {"type": "array", "items": _PICK_ITEM},
+        "local_picks": {"type": "array", "items": _PICK_ITEM},
     },
-    "required": ["picks"],
+    "required": ["picks", "local_picks"],
     "additionalProperties": False,
 }
 
 
-def select(client, totals, candidates):
+def select(client, totals, candidates, limit=PICK_COUNT, local_limit=LOCAL_PICK_COUNT):
     """**40件を1コールで捌く（R1）。** 1件ずつ投げるとシステムプロンプトを40回払う"""
     lines = []
     for i, item in enumerate(candidates):
         source = item.get("source") or item.get("origin", "")
         description = item.get("description", "")
-        line = f"[{i}] {item['title']} — {source}"
+        # **現地語の記事はそう分かるように出す。** 言語が混ざっていることを
+        # 伝えないと、モデルが「関係のない記事が混ざっている」と判断して落とす
+        tag = f" [{item['lang']} local]" if is_local(item) else ""
+        line = f"[{i}]{tag} {item['title']} — {source}"
         if description:
             line += f"\n    {description[:200]}"
         lines.append(line)
@@ -1053,8 +1352,19 @@ def select(client, totals, candidates):
 
 {chr(10).join(lines)}
 
-Choose at most {PICK_COUNT} items to publish, best first. For each, return its index and
-one category:
+Return **two separate lists**.
+
+`picks` — at most {limit} of the English items, best first.
+
+`local_picks` — the items marked `[ja local]`, `[ko local]` and `[zh_Hant local]`.
+**Fill this list independently of `picks`.** Take up to {local_limit} for each language
+that appears, and work through the languages one at a time. These go to readers of that
+language who never see the English list, so "the English items are better" is not a
+reason to leave a language empty. What disqualifies a local item is re-reporting a story
+already in the English list, or being thin on its own terms. Return an empty list only if
+that is true of every local item today.
+
+For each item in either list, return its index and one category:
 
   chip    = semiconductors, fabs, capacity, memory, packaging, hardware supply
   model   = AI models, research results, capability or benchmark news
@@ -1067,7 +1377,16 @@ one category:
 Include one or two `howto` items when the list contains good ones. Do not force it —
 if nothing today qualifies, publish none rather than picking a weak one.
 
-Return fewer than {PICK_COUNT} if fewer are worth publishing. Do not pad the list."""
+Also return `tags` for each item: 1 to {MAX_TAGS} ids from this list, most relevant first.
+
+{TOPIC_HINTS}
+
+Use ONLY ids from that list — never invent one. Tag what the item is actually about, not
+every subject it mentions in passing. **Do not pad to {MAX_TAGS}**: one precise tag is
+better than three loose ones, and a loose tag puts the item in front of a reader who
+asked for something else. Return an empty list only if genuinely nothing fits.
+
+Return fewer than {limit} if fewer are worth publishing. Do not pad the list."""
 
     data = _call(
         client, totals,
@@ -1078,14 +1397,30 @@ Return fewer than {PICK_COUNT} if fewer are worth publishing. Do not pad the lis
         return []
 
     picked = []
-    for pick in data.get("picks", [])[:PICK_COUNT]:
+    # **枠は言語ごとに数える。** プロンプトでもフィールドでも分けてあるが、
+    # **モデルの数え方を信じない**（範囲外の番号を信じないのと同じ理由）。
+    # 英語のリストに現地語が混ざって返ってきても、ここで正しい枠に振り分かる
+    counts = {}
+    for pick in list(data.get("picks") or []) + list(data.get("local_picks") or []):
         index = pick.get("index")
         # **範囲外の番号を信じない。** 出てきた番号がずれていると別の記事を載せる
         if not isinstance(index, int) or not (0 <= index < len(candidates)):
             print(f"    選別が範囲外の番号を返した: {index}")
             continue
         item = dict(candidates[index])
+        bucket = item["lang"] if is_local(item) else LANG_GLOBAL
+        if counts.get(bucket, 0) >= (limit if bucket == LANG_GLOBAL else local_limit):
+            continue
+        counts[bucket] = counts.get(bucket, 0) + 1
         item["category"] = pick.get("category") if pick.get("category") in CATEGORIES else "other"
+        # **表に無いタグは落とす。** スキーマで enum を掛けてあるので普通は通らないが、
+        # 通すとアプリ側でラベルの引けないタグが残り、絞り込みに一生引っかからない
+        tags, seen = [], set()
+        for tag in pick.get("tags") or []:
+            if tag in TOPIC_IDS and tag not in seen:
+                seen.add(tag)
+                tags.append(tag)
+        item["tags"] = tags[:MAX_TAGS]
         picked.append(item)
     return picked
 
@@ -1156,7 +1491,7 @@ Write the Japanese natively — it must not read like a translation. Return exac
     return rows
 
 
-def translate(client, totals, language, name, rows):
+def translate(client, totals, language, name, rows, _retry=True):
     """**元記事ではなく、出来上がった英語の要約を訳す（R3）。**
 
     入力が1/3になり、単価も1/3になる。翻訳は要約より簡単なのでHaikuで足りる。
@@ -1185,6 +1520,13 @@ Return exactly {len(rows)} items, in the same order, each with a `title` and a `
     items = data.get("items", [])
     if len(items) != len(rows):
         print(f"    {language} の翻訳の件数がずれた: {len(items)} / {len(rows)}")
+        # **多い側を切り詰めて使わない。** 途中で1件が2件に割れていると、
+        # 以降の訳が1つずつずれて**別の記事に別の要約が付く**。
+        # 英語に倒れるより悪いので、数が合わないものは丸ごと捨てる。
+        # ただし**捨てる前に1回やり直す**（実測でこのずれは散発的に起きる）
+        if _retry:
+            print(f"    {language} をもう一度訳す")
+            return translate(client, totals, language, name, rows, _retry=False)
         return None
     return items
 
@@ -1263,6 +1605,11 @@ def to_rows(picked, summaries, translations):
     """Firestoreに入れる形にする。**アプリの `SectorDigest.newsItem` が読む形**"""
     rows = []
     for i, item in enumerate(picked):
+        # **現地語の記事はまとめに入れない。** まとめの面には出し分けの仕組みが無く、
+        # 既に配信済みのバージョンを使っている利用者はアプリを更新しても絞れない
+        # （韓国の国内話題が日本語に訳されて並ぶ）。フィードにだけ入れる
+        if is_local(item):
+            continue
         summary = summaries[i]
         row = {
             "source": item.get("source") or "",
@@ -1309,13 +1656,114 @@ def write_digest(db, doc_id, rows):
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# AIフィード（`ai_feed/{sha1}`）
+#
+# **同じ収集・選別・要約の結果を、もう1つの形で置くだけ。** 追加のAPI呼び出しは
+# ゼロなので、費用は増えない。日付で束ねた `sector_digest` は「その日のまとめ」を
+# 読ませる面、こちらは**利用者が選んだトピックだけ**を流す面で、束ね方が違う。
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+def feed_doc_id(url):
+    """設計メモ §3。**URLのSHA-1の先頭16文字。**
+
+    `url_hash`（SHA-256）とは別に持つ。あちらは `processed_urls` のIDで、
+    **すでに書かれたドキュメントのIDを変えられない**ので揃えられない。
+    """
+    return hashlib.sha1(url.encode("utf-8")).hexdigest()[:16]
+
+
+def to_feed_docs(picked, summaries, translations, now):
+    """`ai_feed` に入れる形にする。**アプリの `AIFeedItem` が読む形。**
+
+    ⚠️ **繁體中文のキーは `zh_Hant`。** 設計メモは `zhHant` と書いているが、
+    このリポジトリとアプリは既に `zh_Hant`（`TRANSLATED` / `SectorDigest.languageKeys`）で
+    通してある。**綴りを3つ目に増やすと、どれで書かれたか分からない項目がもう1つ増える。**
+    アプリ側は `zh_Hant` / `zh` / `zhHant` のどれでも読めるようにしてある。
+
+    **`title` は原文のまま置く**（設計メモの通り）。ただし訳した見出しは要約と
+    同じコールで既に手元にあるので、`titles` にも入れておく。入れないと、隣の
+    まとめの面が日本語の見出しなのに、フィードだけ英語の見出しが並ぶ。
+    """
+    docs = []
+    for i, item in enumerate(picked):
+        summary = summaries[i]
+        titles = {"ja": summary["title_ja"], "en": summary["title_en"]}
+        bodies = {"ja": summary["summary_ja"], "en": summary["summary_en"]}
+        for language, rows in translations.items():
+            titles[language] = rows[i]["title"]
+            bodies[language] = rows[i]["summary"]
+
+        # **`publishedAt` を必ず入れる。** アプリは `publishedAt` の降順で引くので、
+        # 欠けているドキュメントは索引に載らず、**画面に一生出てこない。**
+        # 日時を読めなかった記事も収集の窓の中にはあるので、いまの時刻に倒す
+        published = item.get("published_at") or now
+
+        doc = {
+            "kind": "news",
+            # 収集元の言語。**アプリはこれで出し分ける**（英語＝全員、
+            # 現地語＝その言語で読んでいる利用者だけ）
+            "lang": item.get("lang") or LANG_GLOBAL,
+            "title": item["title"],
+            "titles": titles,
+            "url": item["url"],
+            "source": item.get("source") or "",
+            "publishedAt": published,
+            "tags": item.get("tags", []),
+            "summary": bodies,
+            # 動画だけが持つ伸び率（設計メモ §4.3）。ニュースは0
+            "score": 0,
+            "createdAt": now,
+            "expiresAt": published + timedelta(days=AI_FEED_RETENTION_DAYS),
+            # まとめの面と同じ区分・銘柄も入れておく（同じ選別結果なので費用はかからない）
+            "category": item.get("category", "other"),
+            "tickers": item.get("tickers", []),
+        }
+        # **無い項目は書かない。** `thumbnailUrl: null` / `durationSec: null` を
+        # 置くと、アプリ側で「取得に失敗した」のか「もともと無い」のか区別できない
+        docs.append((feed_doc_id(item["url"]), doc))
+    return docs
+
+
+def write_ai_feed(db, docs):
+    """**書き込む前に存在を確かめる**（設計メモ §3）。
+
+    cronが二重に走っても、同じ記事が2つのドキュメントになることは無い（IDがURL由来）。
+    それでも上書きしないのは、**既に出ているものの内容を後から変えない**ため。
+    """
+    if not docs:
+        return 0
+
+    refs = [db.collection(AI_FEED_COLLECTION).document(doc_id) for doc_id, _ in docs]
+    existing = set()
+    try:
+        for i in range(0, len(refs), 200):
+            for doc in db.get_all(refs[i:i + 200]):
+                if doc.exists:
+                    existing.add(doc.id)
+    except Exception as e:
+        # 引けなくても止めない。**上書きになるだけ**で、重複はIDで防げている
+        print(f"  ai_feed の存在確認に失敗したので、そのまま書く: {e}")
+
+    added = [(doc_id, doc) for doc_id, doc in docs if doc_id not in existing]
+    if not added:
+        print("ai_feed に足すものが無い")
+        return 0
+
+    batch = db.batch()
+    for doc_id, doc in added:
+        batch.set(db.collection(AI_FEED_COLLECTION).document(doc_id), doc)
+    batch.commit()
+    return len(added)
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 取り込み
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 def collect(since):
     print("収集")
-    items = (collect_google_news() + collect_ir() + collect_practice()
-             + collect_hacker_news(since))
+    items = (collect_google_news() + collect_google_news_local()
+             + collect_ir() + collect_practice() + collect_hacker_news(since))
     print(f"  合計 {len(items)} 件")
     return items
 
@@ -1334,16 +1782,27 @@ def report_cost(totals):
     print(f"  この実行の概算: 約 ${total:.4f}（月30日で約 ${total * 30:.2f}）")
 
 
-def main(db, client):
+def main(db, client, feed_only=False):
+    """`feed_only` のときは `ai_feed` にだけ書く（まとめには触らない）。
+
+    **窓（`LOOKBACK_HOURS`）は縮めない。** `processed_urls` が既出を落とすので、
+    2時間おきに回しても同じ記事を二度要約することは無い。逆に窓を縮めると、
+    cronが遅れた回（実測で4時間26分の遅延がある）に取りこぼす。
+    """
     totals = {}
     now = datetime.now(UTC)
     since = now - timedelta(hours=LOOKBACK_HOURS)
     dry_run = os.environ.get("DRY_RUN") == "1"
+    limit = FEED_PICK_COUNT if feed_only else PICK_COUNT
+    local_limit = FEED_LOCAL_PICK_COUNT if feed_only else LOCAL_PICK_COUNT
+    label = "フィードのみ" if feed_only else "まとめ＋フィード"
+    print(f"実行: {label}（英語 最大 {limit} 件 ＋ 現地語 各 {local_limit} 件）\n")
 
     # **取り込みより先に掃除する。** 取り込みが途中で落ちても掃除は済んでいる
     if not dry_run:
         purge_expired(db, COLLECTION)
         purge_expired(db, PROCESSED_COLLECTION)
+        purge_expired(db, AI_FEED_COLLECTION)
 
     candidates = preprocess(collect(since), since)
     if not candidates:
@@ -1358,7 +1817,7 @@ def main(db, client):
         return
 
     print("選別")
-    picked = select(client, totals, fresh)
+    picked = select(client, totals, fresh, limit=limit, local_limit=local_limit)
     if not picked:
         print("載せるものが無いので中止")
         report_cost(totals)
@@ -1387,18 +1846,38 @@ def main(db, client):
     rows = to_rows(picked, summaries, translations)
     doc_id = now.astimezone(JST).strftime("%Y-%m-%d")
 
-    print(f"\n{doc_id} に {len(rows)} 件")
-    for row in rows:
-        print(f"  [{row['category']}] {row['ja']['title']}")
+    feed_docs = to_feed_docs(picked, summaries, translations, now)
+
+    # **`rows` と `feed_docs` を zip しない。** まとめには現地語が入らないので
+    # 長さが揃わず、別の記事どうしが対になる
+    print(f"\nまとめ {len(rows)} 件 / ai_feed {len(feed_docs)} 件"
+          + ("（今回はまとめに書かない）" if feed_only else ""))
+    for _, doc in feed_docs:
+        tags = ",".join(doc["tags"]) or "-"
+        mark = "  " if doc["lang"] == LANG_GLOBAL else f"{doc['lang'][:2]}"
+        print(f"  {mark} [{doc['category']:7}] {tags:34} {doc['titles']['ja']}")
+
+    # **タグが1つも付かなかった記事を黙って通さない。** フィードは
+    # タグでしか出し分けられないので、無タグの記事は誰の画面にも出ない
+    untagged = sum(1 for _, doc in feed_docs if not doc["tags"])
+    if untagged:
+        print(f"  ⚠️ タグの付かなかった記事が {untagged} 件（AIフィードには出ない）")
 
     if dry_run:
         print("\nDRY_RUN のため書き込みませんでした")
         report_cost(totals)
         return
 
-    added = write_digest(db, doc_id, rows)
-    mark_processed(db, [r["url"] for r in rows])
-    print(f"書き込み {added} 件")
+    # **feed_only はまとめに触らない。** 詳しくは `FEED_PICK_COUNT` のコメント
+    added = 0 if feed_only else write_digest(db, doc_id, rows)
+    feed_added = write_ai_feed(db, feed_docs)
+    # **書き込みのあとに印を付ける。** 先に付けると、書き込みが落ちた日の記事が
+    # 「処理済み」として二度と拾われなくなる
+    # **`rows` ではなく `feed_docs` を見る。** まとめには現地語が入らないので、
+    # `rows` で印を付けると現地語の記事が毎回「新規」になり、2時間おきに
+    # 同じ記事を要約し続ける
+    mark_processed(db, [doc["url"] for _, doc in feed_docs])
+    print(f"書き込み まとめ {added} 件 / ai_feed {feed_added} 件")
     report_cost(totals)
 
 
@@ -1441,6 +1920,8 @@ def inspect():
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--inspect", action="store_true", help="収集と前処理だけ試す")
+    parser.add_argument("--feed-only", action="store_true",
+                        help="ai_feed にだけ書く（まとめは触らない）。2時間おきの実行用")
     args = parser.parse_args()
 
     if args.inspect:
@@ -1453,4 +1934,5 @@ if __name__ == "__main__":
     service_account = json.loads(os.environ["FIREBASE_SERVICE_ACCOUNT"])
     firebase_admin.initialize_app(credentials.Certificate(service_account))
 
-    main(firestore.client(), Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"].strip()))
+    main(firestore.client(), Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"].strip()),
+         feed_only=args.feed_only)
