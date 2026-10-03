@@ -76,10 +76,11 @@
         <ul>
             <li><strong>Yahoo Finance</strong> (share prices, price history, dividends, index levels and extended-hours quotes for all supported markets; symbol search): <a href="https://legal.yahoo.com/us/en/yahoo/privacy/index.html" target="_blank">Yahoo Privacy Policy</a></li>
             <li><strong>Google News</strong> (news articles): <a href="https://policies.google.com/privacy" target="_blank">Google Privacy Policy</a></li>
-            <li><strong>OpenAI</strong> (generating AI summaries): <a href="https://openai.com/policies/privacy-policy" target="_blank">OpenAI Privacy Policy</a></li>
+            <li><strong>OpenAI</strong> (AI generation in app version 2.7 and earlier): <a href="https://openai.com/policies/privacy-policy" target="_blank">OpenAI Privacy Policy</a></li>
+            <li><strong>Amazon Web Services (AWS)</strong> (authenticated API, AI summaries and stock analysis in version 2.8 and later): <a href="https://aws.amazon.com/privacy/" target="_blank">AWS Privacy Notice</a></li>
             <li><strong>Firebase (Google)</strong> (anonymous sign-in, storing your watchlist and settings, delivering push notifications, and reading content we prepare): <a href="https://policies.google.com/privacy" target="_blank">Google Privacy Policy</a></li>
         </ul>
-        <p>When an AI summary is generated, the price figures and the headlines and summary text of the news articles are sent to the OpenAI API. The ticker symbol you are viewing is sent to the price sources. The news sources receive the ticker symbol along with the company name and the language being searched. No information that directly identifies you is sent to any of these services.</p>
+        <p>In version 2.8 and later, when the app generates an AI summary, stock analysis or investment-hypothesis question, it sends the information needed for that request to our AWS API. This can include the selected ticker, prices and metrics, news headlines and summaries, filing information, AI settings and hypothesis text you entered. A Firebase anonymous ID token is also sent to authenticate the request. Generation runs on Amazon Bedrock in AWS. In version 2.7 and earlier, AI generation sends relevant prices, news headlines and summaries, or hypothesis text you entered, to the OpenAI API. The app does not automatically send your name or email address to the AI service, but information you include in your own text is sent. Price sources receive the ticker you are viewing; news sources receive the ticker, company name and search language.</p>
 
         <h3>Services the app no longer contacts directly</h3>
         <p>From version 2.0, news, earnings dates, company logos and extended-hours quotes for US stocks are fetched by our server and stored in Firebase; the app only reads them. Your device no longer communicates directly with:</p>
@@ -117,7 +118,7 @@
         <p><strong>StockWatch Labs</strong><br>
         Email: sh.hirokawa@icloud.com</p>
 
-        <p class="updated">Last updated: August 24, 2026</p>
+        <p class="updated">Last updated: October 3, 2026</p>
         <div class="footer">&copy; 2026 StockWatch Labs. All rights reserved.</div>
     </div>
 </body>
