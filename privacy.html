@@ -71,10 +71,11 @@
         <ul>
             <li><strong>Yahoo Finance</strong>（全対応市場の株価・チャート・配当・指数の取得、時間外気配、銘柄検索）：<a href="https://legal.yahoo.com/us/en/yahoo/privacy/index.html" target="_blank">Yahoo Privacy Policy</a></li>
             <li><strong>Googleニュース</strong>（ニュースの取得）：<a href="https://policies.google.com/privacy" target="_blank">Google Privacy Policy</a></li>
-            <li><strong>Amazon Web Services（AWS）</strong>（認証付きAPI、AI要約・銘柄分析の生成）：<a href="https://aws.amazon.com/privacy/" target="_blank">AWS Privacy Notice</a></li>
+            <li><strong>OpenAI</strong>（バージョン2.7以前のAI生成）：<a href="https://openai.com/policies/privacy-policy" target="_blank">OpenAI Privacy Policy</a></li>
+            <li><strong>Amazon Web Services（AWS）</strong>（バージョン2.8以降の認証付きAPI、AI要約・銘柄分析の生成）：<a href="https://aws.amazon.com/privacy/" target="_blank">AWS Privacy Notice</a></li>
             <li><strong>Firebase（Google）</strong>（匿名認証、ウォッチリスト等の保存、プッシュ通知の配信、当社が用意した情報の読み取り）：<a href="https://policies.google.com/privacy" target="_blank">Google Privacy Policy</a></li>
         </ul>
-        <p>AI要約・銘柄分析・投資仮説の問いを生成する際、選択した銘柄のコード、株価や指標、ニュースの見出し・要約、開示情報、AI設定や入力した仮説文など、生成に必要な内容を当社のAWS APIに送信します。Firebaseの匿名認証トークンもAPIの認証に使用します。AWS上のAmazon Bedrockで生成を処理します。氏名やメールアドレスをアプリが自動でAIに送信することはありませんが、利用者が入力内容に含めた情報は送信されます。株価の取得先には閲覧中の銘柄コードが、ニュースの取得先には銘柄コード、会社名、検索言語が送信されます。</p>
+        <p>バージョン2.8以降でAI要約・銘柄分析・投資仮説の問いを生成する際、選択した銘柄のコード、株価や指標、ニュースの見出し・要約、開示情報、AI設定や入力した仮説文など、生成に必要な内容を当社のAWS APIに送信します。Firebaseの匿名認証トークンもAPIの認証に使用します。AWS上のAmazon Bedrockで生成を処理します。バージョン2.7以前のAI生成では、必要に応じて株価、ニュースの見出し・要約、利用者が入力した仮説文をOpenAI APIに送信します。氏名やメールアドレスをアプリが自動でAIに送信することはありませんが、利用者が入力内容に含めた情報は送信されます。株価の取得先には閲覧中の銘柄コードが、ニュースの取得先には銘柄コード、会社名、検索言語が送信されます。</p>
 
         <h3>アプリから直接送信しなくなったサービス</h3>
         <p>バージョン2.0より、米国株のニュース・決算・企業ロゴ・時間外気配は、当社のサーバー側で取得してFirebaseに保存したものをアプリが読み取る方式に変更しました。これにより、以下のサービスへお客様の端末から直接通信することはなくなりました。</p>
