@@ -39,6 +39,14 @@ from datetime import datetime, timedelta, timezone
 
 import requests
 
+from security import (
+    safe_exception,
+    user_data,
+    notification_token,
+    valid_watchlist,
+    load_users,
+)
+
 import i18n
 
 INDEX_URL = "https://www.jpx.co.jp/markets/public/short-selling/index.html"
@@ -351,13 +359,13 @@ def notify(db, ranking):
     watchlistは `7203.T` 形式、JPXは `7203` なので、末尾を落として突き合わせる。
     """
     by_code = {r["code"]: r for r in ranking}
-    users = list(db.collection("users").stream())
+    users = load_users(db)
     print(f"ユーザー数: {len(users)}")
 
     sent = failed = skipped = 0
     for u in users:
-        u_data = u.to_dict()
-        token = u_data.get("fcmToken")
+        u_data = user_data(u)
+        token = notification_token(u_data)
         if not token:
             continue
         if u_data.get("notifyShortSelling", True) is False:
@@ -365,7 +373,7 @@ def notify(db, ranking):
             continue
 
         hits = []
-        for symbol in u_data.get("watchlist") or []:
+        for symbol in valid_watchlist(u_data.get("watchlist")):
             if not symbol.upper().endswith(".T"):
                 continue
             hit = by_code.get(symbol[:-2])
@@ -392,7 +400,7 @@ def notify(db, ranking):
                 for h in hits
             )
         try:
-            res = messaging.send(
+            messaging.send(
                 messaging.Message(
                     notification=messaging.Notification(title=title, body=body),
                     data={"symbol": f"{hits[0]['code']}.T"},
@@ -400,10 +408,9 @@ def notify(db, ranking):
                 )
             )
             sent += 1
-            print(f"通知送信成功: {u.id} → FCM応答={res}")
         except Exception as e:
             failed += 1
-            print(f"通知送信失敗: {u.id} → {repr(e)}")
+            print(f"通知送信失敗: {safe_exception(e)}")
 
     print(f"送信 {sent} 件 / 失敗 {failed} 件 / 設定オフ {skipped} 件")
 
@@ -456,17 +463,21 @@ def main():
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--inspect", action="store_true", help="取得と解釈だけ試す（認証不要）")
-    args = parser.parse_args()
+    try:
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--inspect", action="store_true", help="取得と解釈だけ試す（認証不要）")
+        args = parser.parse_args()
 
-    if args.inspect:
-        sys.exit(inspect())
+        if args.inspect:
+            sys.exit(inspect())
 
-    import firebase_admin
-    from firebase_admin import credentials, firestore, messaging
+        import firebase_admin
+        from firebase_admin import credentials, firestore, messaging
 
-    cred = credentials.Certificate(json.loads(os.environ["FIREBASE_SERVICE_ACCOUNT"]))
-    firebase_admin.initialize_app(cred)
-    db = firestore.client()
-    main()
+        cred = credentials.Certificate(json.loads(os.environ["FIREBASE_SERVICE_ACCOUNT"]))
+        firebase_admin.initialize_app(cred)
+        db = firestore.client()
+        main()
+    except Exception as error:
+        print(f"実行に失敗: {safe_exception(error)}")
+        raise SystemExit(1) from None

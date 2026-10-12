@@ -47,6 +47,14 @@ from zoneinfo import ZoneInfo
 
 import requests
 
+from security import (
+    safe_exception,
+    valid_watchlist,
+    load_users,
+    aggregate_watchlists,
+    MAX_SHARED_SYMBOLS,
+)
+
 import news_sources
 
 ET = ZoneInfo("America/New_York")
@@ -90,11 +98,11 @@ def call(url, params, label, headers=None):
         # **402は「そのプランでは扱えない銘柄」。** 異常ではないので数えるだけ
         _failures.setdefault(code, []).append(label)
         if code != 402:
-            print(f"    {label} に失敗: {e}")
+            print(f"    外部APIの取得に失敗: {safe_exception(e)}")
         return None
     except Exception as e:
         _failures.setdefault("other", []).append(label)
-        print(f"    {label} に失敗: {e}")
+        print(f"    外部APIの取得に失敗: {safe_exception(e)}")
         return None
 
 
@@ -104,9 +112,7 @@ def report_failures():
         note = ""
         if code == 429:
             note = "（レート制限。API_INTERVAL を延ばす）"
-        head = ", ".join(l.split()[0] for l in labels[:12])
-        more = f" ほか{len(labels) - 12}件" if len(labels) > 12 else ""
-        print(f"  取得できず [{code}] {len(labels)}件{note}: {head}{more}")
+        print(f"  取得できず [{code}] {len(labels)}件{note}")
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -304,7 +310,7 @@ def fetch_news(symbol, key, allowed, min_kept=0):
 
     # **少なすぎたら絞る前に戻す。** 記事が全く出ないほうが体験として悪い
     if len(kept) <= min_kept:
-        print(f"    {symbol}: 絞ると {len(kept)} 件（下限 {min_kept}）なので絞らない一覧に戻す")
+        print(f"    ニュースの件数が下限に届かないため配信元の絞り込みを解除 ({len(kept)}/{min_kept})")
         return diversified(raw, NEWS_LIMIT), False
 
     return diversified(kept, NEWS_LIMIT), True
@@ -379,15 +385,12 @@ def load_watched(db):
         if tickers and updated:
             try:
                 if datetime.now(UTC) - datetime.fromisoformat(updated) < WATCHED_MAX_AGE:
-                    return sorted(tickers)
+                    return valid_watchlist(tickers, us_only=True, limit=MAX_SHARED_SYMBOLS)
             except ValueError:
                 pass
 
     print("集約ドキュメントが古い（または無い）ので users から作る")
-    symbols = set()
-    for u in db.collection("users").stream():
-        symbols.update((u.to_dict() or {}).get("watchlist") or [])
-    tickers = sorted(s for s in symbols if "." not in s and s)
+    tickers = aggregate_watchlists(load_users(db), us_only=True)
     db.collection(WATCHED_DOC[0]).document(WATCHED_DOC[1]).set(
         {"tickers": tickers, "updatedAt": datetime.now(UTC).isoformat()}
     )
@@ -434,8 +437,6 @@ def run_quotes(db, tickers):
         quote = build_quote(symbol, session)
         if not quote:
             continue
-        ext = quote["extendedPrice"]
-        print(f"  {symbol:6} 終値={quote['regularClose']} 時間外={ext}")
         if not dry_run:
             db.collection(QUOTES_COLLECTION).document(symbol).set(quote)
             written += 1
@@ -453,10 +454,7 @@ def run_symbols(db, tickers):
     dry_run = os.environ.get("DRY_RUN") == "1"
     written = 0
     for symbol in tickers:
-        print(f"  {symbol}")
         doc = build_symbol(symbol, key, allowed, min_kept)
-        print(f"    ニュース {len(doc['news'])} 件 (絞った={doc['newsFiltered']}) "
-              f"決算={bool(doc['nextEarnings'])} ロゴ={bool(doc['logo'])}")
         if not dry_run:
             db.collection(SYMBOLS_COLLECTION).document(symbol).set(doc)
             written += 1
@@ -500,30 +498,34 @@ def inspect():
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("mode", nargs="?", choices=["quotes", "symbols"])
-    parser.add_argument("--inspect", action="store_true", help="取得と絞り込みだけ試す")
-    args = parser.parse_args()
+    try:
+        parser = argparse.ArgumentParser()
+        parser.add_argument("mode", nargs="?", choices=["quotes", "symbols"])
+        parser.add_argument("--inspect", action="store_true", help="取得と絞り込みだけ試す")
+        args = parser.parse_args()
 
-    if args.inspect:
-        sys.exit(inspect())
-    if not args.mode:
-        parser.error("mode（quotes / symbols）か --inspect を指定してください")
+        if args.inspect:
+            sys.exit(inspect())
+        if not args.mode:
+            parser.error("mode（quotes / symbols）か --inspect を指定してください")
 
-    import firebase_admin
-    from firebase_admin import credentials, firestore
+        import firebase_admin
+        from firebase_admin import credentials, firestore
 
-    firebase_admin.initialize_app(
-        credentials.Certificate(json.loads(os.environ["FIREBASE_SERVICE_ACCOUNT"]))
-    )
-    db = firestore.client()
+        firebase_admin.initialize_app(
+            credentials.Certificate(json.loads(os.environ["FIREBASE_SERVICE_ACCOUNT"]))
+        )
+        db = firestore.client()
 
-    watched = load_watched(db)
-    if not watched:
-        print("対象の米国株が無いため中止")
-        sys.exit(0)
+        watched = load_watched(db)
+        if not watched:
+            print("対象の米国株が無いため中止")
+            sys.exit(0)
 
-    if args.mode == "quotes":
-        run_quotes(db, watched)
-    else:
-        run_symbols(db, watched)
+        if args.mode == "quotes":
+            run_quotes(db, watched)
+        else:
+            run_symbols(db, watched)
+    except Exception as error:
+        print(f"実行に失敗: {safe_exception(error)}")
+        raise SystemExit(1) from None

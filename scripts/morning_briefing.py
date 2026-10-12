@@ -1,7 +1,17 @@
 import os
 import json
-import traceback
 import requests
+
+from security import (
+    safe_exception,
+    user_data,
+    notification_token,
+    valid_watchlist,
+    load_users,
+    aggregate_watchlists,
+    MAX_SUMMARIES_PER_RUN as MAX_PAID_SUMMARIES,
+    WorkBudget,
+)
 import firebase_admin
 from firebase_admin import credentials, firestore, messaging
 from anthropic import Anthropic
@@ -9,16 +19,7 @@ from datetime import datetime, timedelta
 
 import i18n
 
-FINNHUB_KEY = os.environ["FINNHUB_API_KEY"].strip()
-ANTHROPIC_KEY = os.environ["ANTHROPIC_API_KEY"].strip()
-
-print(f"FINNHUBキー: {len(FINNHUB_KEY)}文字")
-print(f"ANTHROPICキー: {len(ANTHROPIC_KEY)}文字")
-
-cred = credentials.Certificate(json.loads(os.environ["FIREBASE_SERVICE_ACCOUNT"]))
-firebase_admin.initialize_app(cred)
-db = firestore.client()
-claude = Anthropic(api_key=ANTHROPIC_KEY)
+FINNHUB_KEY = ""
 
 
 def get_quote(symbol):
@@ -28,7 +29,6 @@ def get_quote(symbol):
         timeout=10,
     )
     d = r.json()
-    print(f"  [{symbol}] 株価API応答: {d}")
     price = d.get("c") or 0
     # **値が取れない銘柄は落とす。** Finnhubは現行プランで米国株しか返さず、
     # 米国以外は 200 のまま全項目0で返ってくる。そのまま通すと
@@ -52,7 +52,6 @@ def get_news(symbol):
     )
     data = r.json()
     items = data[:3] if isinstance(data, list) else []
-    print(f"  [{symbol}] ニュース {len(items)}件")
     # 通知をタップしたときに開く記事が要るので、見出しとURLを対で持つ
     return [
         {"headline": i.get("headline", ""), "url": i.get("url", "")}
@@ -107,13 +106,11 @@ no bullet marks. Output the sentence only."""
 
 
 def main():
-    users = list(db.collection("users").stream())
+    users = load_users(db)
     print(f"ユーザー数: {len(users)}")
 
-    all_symbols = set()
-    for u in users:
-        all_symbols.update(u.to_dict().get("watchlist", []))
-    print(f"対象銘柄: {all_symbols}")
+    all_symbols = aggregate_watchlists(users, us_only=True)
+    print(f"対象銘柄数: {len(all_symbols)}")
 
     # 株価とニュースは言語に依らないので、銘柄ごとに1回だけ取る
     market = {}
@@ -122,22 +119,25 @@ def main():
             q = get_quote(sym)
             if q is None:
                 # 米国以外の銘柄。Finnhubが値を返さないため、この銘柄は載せない
-                print(f"{sym}: 株価が取れないためスキップ（米国株以外の可能性）")
                 continue
             market[sym] = {"quote": q, "news": get_news(sym)}
         except Exception as e:
-            print(f"{sym} の取得に失敗: {repr(e)}")
-            traceback.print_exc()
+            print(f"銘柄データの取得に失敗: {safe_exception(e)}")
 
     # 要約は (銘柄, 言語) ごとに作る。
     # **使われている言語のぶんだけ作る。** 利用者の大半が日本語なら、
     # 呼び出し回数はこれまでと変わらない
     summaries = {}
+    summary_budget = WorkBudget(MAX_PAID_SUMMARIES)
+    sent = failed = skipped = 0
 
     def summary_for(symbol, language_name):
         key = (symbol, language_name)
         if key in summaries:
             return summaries[key]
+        if not summary_budget.take():
+            summaries[key] = ""
+            return ""
         entry = market[symbol]
         try:
             text = summarize(
@@ -147,28 +147,26 @@ def main():
                 language_name,
             )
         except Exception as e:
-            print(f"{symbol}({language_name}) の要約に失敗: {repr(e)}")
-            traceback.print_exc()
+            print(f"要約に失敗: {safe_exception(e)}")
             text = ""
         summaries[key] = text
-        print(f"{symbol} [{language_name}]: {text}")
         return text
 
     for u in users:
-        data = u.to_dict()
-        token = data.get("fcmToken")
-        watchlist = data.get("watchlist", [])
+        data = user_data(u)
+        token = notification_token(data)
+        watchlist = valid_watchlist(data.get("watchlist"), us_only=True)
         if not token or not watchlist:
-            print(f"{u.id}: トークンかウォッチリストが空のためスキップ")
+            skipped += 1
             continue
         # アプリの通知設定。値が無い利用者は既定でオンとして扱う
         if data.get("notifyMorning", True) is False:
-            print(f"{u.id}: notifyMorning がオフのためスキップ")
+            skipped += 1
             continue
 
         valid = [s for s in watchlist if s in market]
         if not valid:
-            print(f"{u.id}: 有効な銘柄データがないためスキップ")
+            skipped += 1
             continue
 
         # AIの出力言語。指定が無い利用者は表示言語、それも無ければ日本語
@@ -188,18 +186,23 @@ def main():
                 f"{lead} is at ${lq['price']:,.2f} ({lq['change_pct']:+.2f}% from the previous close).",
             )
 
-        db.collection("briefings").document(u.id).set({
-            "createdAt": firestore.SERVER_TIMESTAMP,
-            "items": [
-                {
-                    "symbol": s,
-                    "price": market[s]["quote"]["price"],
-                    "changePct": market[s]["quote"]["change_pct"],
-                    "summary": summary_for(s, language_name),
-                }
-                for s in valid
-            ],
-        })
+        try:
+            db.collection("briefings").document(u.id).set({
+                "createdAt": firestore.SERVER_TIMESTAMP,
+                "items": [
+                    {
+                        "symbol": s,
+                        "price": market[s]["quote"]["price"],
+                        "changePct": market[s]["quote"]["change_pct"],
+                        "summary": summary_for(s, language_name),
+                    }
+                    for s in valid
+                ],
+            })
+        except Exception as e:
+            failed += 1
+            print(f"ブリーフィング保存に失敗: {safe_exception(e)}")
+            continue
 
         # タップしたときに開く記事。ニュースが取れない銘柄もあるので空を許す。
         # 空文字を送っておけばアプリ側は「記事なし」として銘柄だけ開く
@@ -214,11 +217,22 @@ def main():
             token=token,
         )
         try:
-            res = messaging.send(msg)
-            print(f"通知送信成功: {u.id} → {title} / FCM応答={res}")
+            messaging.send(msg)
+            sent += 1
         except Exception as e:
-            print(f"通知送信失敗: {u.id} → {repr(e)}")
+            failed += 1
+            print(f"通知送信失敗: {safe_exception(e)}")
+
+    print(f"送信 {sent} 件 / 失敗 {failed} 件 / スキップ {skipped} 件 / 要約コール {MAX_PAID_SUMMARIES - summary_budget.remaining} 件")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        FINNHUB_KEY = os.environ["FINNHUB_API_KEY"].strip()
+        firebase_admin.initialize_app(credentials.Certificate(json.loads(os.environ["FIREBASE_SERVICE_ACCOUNT"])))
+        db = firestore.client()
+        claude = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"].strip())
+        main()
+    except Exception as error:
+        print(f"実行に失敗: {safe_exception(error)}")
+        raise SystemExit(1) from None

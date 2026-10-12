@@ -132,6 +132,10 @@ from urllib.parse import quote
 
 import requests
 
+from security import (
+    safe_exception,
+)
+
 # 同じ `scripts/` にある表を使い回す。**通すかどうかの判定には使わず、点数に使う**
 # （下のdocstringの「素直に新しい順で40件取ると」を参照）
 import news_sources
@@ -526,9 +530,9 @@ def fetch(url, params=None, retries=2, headers=None):
             if res.status_code not in (429, 500, 502, 503, 504):
                 break
         except requests.RequestException as e:
-            last_error = str(e)
+            last_error = safe_exception(e)
         time.sleep(1.0 * (attempt + 1))
-    raise RuntimeError(f"{url}: {last_error}")
+    raise RuntimeError(f"外部APIを取得できなかった: {last_error}")
 
 
 _TAG = re.compile(r"<[^>]+>")
@@ -587,7 +591,7 @@ def parse_feed(xml, default_source=""):
     try:
         root = ET.fromstring(xml)
     except ET.ParseError as e:
-        raise RuntimeError(f"XMLを読めなかった: {e}")
+        raise RuntimeError(f"XMLを読めなかった: {safe_exception(e)}")
 
     items = []
     for node in root.iter():
@@ -638,7 +642,7 @@ def collect_google_news():
             res = fetch(GOOGLE_NEWS, params=params)
             picked = parse_feed(res.content)
         except RuntimeError as e:
-            print(f"  Googleニュース「{query}」: 取得に失敗したので飛ばす {e}")
+            print(f"  Googleニュース「{query}」: 取得に失敗したので飛ばす {safe_exception(e)}")
             continue
         for item in picked:
             item["title"] = _GOOGLE_SUFFIX.sub("", item["title"]).strip()
@@ -659,7 +663,7 @@ def collect_feeds(feeds, origin, label, suffix=""):
             picked = parse_feed(res.content, default_source=source)
         except RuntimeError as e:
             # **出していない・botを弾くフィードがある。** 落ちても続ける
-            print(f"  {label} {name}: 取得に失敗したので飛ばす {e}")
+            print(f"  {label} {name}: 取得に失敗したので飛ばす {safe_exception(e)}")
             continue
         for item in picked:
             item["source"] = source
@@ -683,7 +687,7 @@ def collect_google_news_local():
                 res = fetch(GOOGLE_NEWS, params=params)
                 picked = parse_feed(res.content)
             except RuntimeError as e:
-                print(f"  {locale['label']}「{query}」: 取得に失敗したので飛ばす {e}")
+                print(f"  {locale['label']}「{query}」: 取得に失敗したので飛ばす {safe_exception(e)}")
                 continue
             for item in picked:
                 item["title"] = _GOOGLE_SUFFIX.sub("", item["title"]).strip()
@@ -718,7 +722,7 @@ def collect_hacker_news(_since):
             res = fetch(HN_SEARCH, params=params)
             hits = res.json().get("hits", [])
         except (RuntimeError, ValueError) as e:
-            print(f"  Hacker News「{query}」: 取得に失敗したので飛ばす {e}")
+            print(f"  Hacker News「{query}」: 取得に失敗したので飛ばす {safe_exception(e)}")
             continue
         picked = 0
         for hit in hits:
@@ -1260,7 +1264,7 @@ def _call(client, totals, *, model, system, prompt, max_tokens, schema, _retry=T
             output_config={"format": {"type": "json_schema", "schema": schema}},
         )
     except Exception as e:
-        print(f"    {model} の呼び出しに失敗: {e}")
+        print(f"    {model} の呼び出しに失敗: {safe_exception(e)}")
         return None
 
     _usage(totals, model, response)
@@ -1274,7 +1278,7 @@ def _call(client, totals, *, model, system, prompt, max_tokens, schema, _retry=T
         try:
             return json.loads(text)
         except json.JSONDecodeError as e:
-            print(f"    {model} のJSONを読めなかった: {e}")
+            print(f"    {model} のJSONを読めなかった: {safe_exception(e)}")
     elif truncated:
         print(f"    {model} が max_tokens({max_tokens}) に達して切れた")
     else:
@@ -1546,7 +1550,7 @@ def already_processed(db, urls):
                     stored.add(doc.id)
         except Exception as e:
             # 引けなくても止めない。**二度要約するだけ**で、壊れはしない
-            print(f"  処理済みの引き当てに失敗したので飛ばす: {e}")
+            print(f"  処理済みの引き当てに失敗したので飛ばす: {safe_exception(e)}")
             return set()
     return stored
 
@@ -1580,7 +1584,7 @@ def purge_expired(db, collection, field="expiresAt"):
         stale = list(query.limit(PURGE_LIMIT).stream())
     except Exception as e:
         # 索引が無い・権限が無いなど。**取り込みは止めない**（掃除は次回でよい）
-        print(f"{collection} の期限切れを引けなかったので掃除を飛ばす: {e}")
+        print(f"{collection} の期限切れを引けなかったので掃除を飛ばす: {safe_exception(e)}")
         return
 
     if not stale:
@@ -1595,7 +1599,7 @@ def purge_expired(db, collection, field="expiresAt"):
             batch.commit()
             deleted += len(stale[i:i + BATCH_SIZE])
         except Exception as e:
-            print(f"{collection} の削除に失敗したので中断: {e}")
+            print(f"{collection} の削除に失敗したので中断: {safe_exception(e)}")
             break
     print(f"{collection}: 期限切れを {deleted} 件消した"
           + ("（上限に達したので残りは次回）" if len(stale) == PURGE_LIMIT else ""))
@@ -1742,7 +1746,7 @@ def write_ai_feed(db, docs):
                     existing.add(doc.id)
     except Exception as e:
         # 引けなくても止めない。**上書きになるだけ**で、重複はIDで防げている
-        print(f"  ai_feed の存在確認に失敗したので、そのまま書く: {e}")
+        print(f"  ai_feed の存在確認に失敗したので、そのまま書く: {safe_exception(e)}")
 
     added = [(doc_id, doc) for doc_id, doc in docs if doc_id not in existing]
     if not added:
@@ -1918,21 +1922,25 @@ def inspect():
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--inspect", action="store_true", help="収集と前処理だけ試す")
-    parser.add_argument("--feed-only", action="store_true",
-                        help="ai_feed にだけ書く（まとめは触らない）。2時間おきの実行用")
-    args = parser.parse_args()
+    try:
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--inspect", action="store_true", help="収集と前処理だけ試す")
+        parser.add_argument("--feed-only", action="store_true",
+                            help="ai_feed にだけ書く（まとめは触らない）。2時間おきの実行用")
+        args = parser.parse_args()
 
-    if args.inspect:
-        sys.exit(inspect())
+        if args.inspect:
+            sys.exit(inspect())
 
-    import firebase_admin
-    from anthropic import Anthropic
-    from firebase_admin import credentials, firestore
+        import firebase_admin
+        from anthropic import Anthropic
+        from firebase_admin import credentials, firestore
 
-    service_account = json.loads(os.environ["FIREBASE_SERVICE_ACCOUNT"])
-    firebase_admin.initialize_app(credentials.Certificate(service_account))
+        service_account = json.loads(os.environ["FIREBASE_SERVICE_ACCOUNT"])
+        firebase_admin.initialize_app(credentials.Certificate(service_account))
 
-    main(firestore.client(), Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"].strip()),
-         feed_only=args.feed_only)
+        main(firestore.client(), Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"].strip()),
+             feed_only=args.feed_only)
+    except Exception as error:
+        print(f"実行に失敗: {safe_exception(error)}")
+        raise SystemExit(1) from None
