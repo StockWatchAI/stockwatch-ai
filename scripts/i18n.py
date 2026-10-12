@@ -60,7 +60,8 @@ _FOLLOW_APP_NAME = {
 
 def display_language(user):
     """表示言語。固定の文言をどちらで出すかを決める"""
-    raw = (user.get("language") or "").strip()
+    value = user.get("language")
+    raw = value.strip() if isinstance(value, str) else ""
     return _APP_LANGUAGE.get(raw, JA)
 
 
@@ -102,7 +103,8 @@ def ai_language_name(user):
 
     `followApp`・未設定・表に無い値は、すべて表示言語に倒す。
     """
-    raw = (user.get("aiLanguage") or "").strip()
+    value = user.get("aiLanguage")
+    raw = value.strip() if isinstance(value, str) else ""
     if raw and raw != "followApp":
         name = _AI_LANGUAGE_NAME.get(raw)
         if name:

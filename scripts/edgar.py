@@ -66,6 +66,14 @@ from datetime import datetime, timedelta, timezone
 
 import requests
 
+from security import (
+    safe_exception,
+    valid_watchlist,
+    load_users,
+    aggregate_watchlists,
+    MAX_SHARED_SYMBOLS,
+)
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 設定
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -216,7 +224,7 @@ def fetch(url, params=None, retries=3):
         except requests.RequestException as e:
             if attempt == retries:
                 raise
-            print(f"    通信に失敗（{e}）。{wait:.0f}秒待って再試行")
+            print(f"    通信に失敗（{safe_exception(e)}）。{wait:.0f}秒待って再試行")
             time.sleep(wait)
             wait *= 2
             continue
@@ -224,7 +232,7 @@ def fetch(url, params=None, retries=3):
         if res.status_code in (403, 429, 503):
             if attempt == retries:
                 res.raise_for_status()
-            print(f"    {res.status_code} が返った。{wait:.0f}秒待って再試行: {url}")
+            print(f"    HTTP {res.status_code}。{wait:.0f}秒待って再試行")
             time.sleep(wait)
             wait *= 2
             continue
@@ -232,7 +240,7 @@ def fetch(url, params=None, retries=3):
         res.raise_for_status()
         return res
 
-    raise RuntimeError(f"取得できなかった: {url}")
+    raise RuntimeError("外部APIを取得できなかった")
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -453,7 +461,7 @@ def submission_index(cik):
     try:
         recent = fetch(SUBMISSIONS.format(cik=cik)).json()["filings"]["recent"]
     except Exception as e:
-        print(f"    提出履歴を取れなかった（CIK {cik}）: {e}")
+        print(f"    提出履歴を取れなかった: {safe_exception(e)}")
         _submissions_cache[cik] = {}
         return {}
 
@@ -506,7 +514,7 @@ def exhibit_urls(entry, limit=3):
     try:
         markup = fetch(index_url).text
     except Exception as e:
-        print(f"    目次を取れなかった: {e}")
+        print(f"    目次を取れなかった: {safe_exception(e)}")
         return []
 
     found = []
@@ -521,7 +529,7 @@ def read_document(url):
     try:
         return to_text(fetch(url).text)
     except Exception as e:
-        print(f"    {url.rsplit('/', 1)[-1]} を取れなかった: {e}")
+        print(f"    提出本文を取れなかった: {safe_exception(e)}")
         return ""
 
 
@@ -529,7 +537,7 @@ def filing_body(entry):
     """要約に渡す本文。本体＋EX-99系の添付を、上限まで順に足す"""
     primary = primary_document(entry)
     if not primary:
-        print(f"    本体が分からない: {entry['accessionNo']}")
+        print("    提出本文のURLが分からない")
         return ""
 
     chunks = []
@@ -624,7 +632,7 @@ def form4_body(entry):
     try:
         parsed = parse_form4(fetch(url).text)
     except Exception as e:
-        print(f"    Form 4 を読めなかった: {e}")
+        print(f"    Form 4 を読めなかった: {safe_exception(e)}")
         return "", None
 
     if not parsed["trades"]:
@@ -752,7 +760,7 @@ def summarize(client, entry, impact, body):
             output_config={"format": {"type": "json_schema", "schema": OUTPUT_SCHEMA}},
         )
     except Exception as e:
-        print(f"    要約に失敗: {e}")
+        print(f"    要約に失敗: {safe_exception(e)}")
         return None
 
     text = next((b.text for b in res.content if getattr(b, "type", None) == "text"), None)
@@ -761,7 +769,7 @@ def summarize(client, entry, impact, body):
     try:
         return json.loads(text)
     except json.JSONDecodeError as e:
-        print(f"    要約のJSONを読めなかった: {e}")
+        print(f"    要約のJSONを読めなかった: {safe_exception(e)}")
         return None
 
 
@@ -788,20 +796,17 @@ def load_watched(db):
                 age = datetime.now(UTC) - datetime.fromisoformat(updated)
                 if age < WATCHED_MAX_AGE:
                     print(f"集約ドキュメントを使う: {len(tickers)} 銘柄（{age} 前に更新）")
-                    return set(tickers)
+                    return set(valid_watchlist(tickers, us_only=True, limit=MAX_SHARED_SYMBOLS))
             except ValueError:
                 pass
 
     print("和集合を作り直す")
-    symbols = set()
-    for u in db.collection("users").stream():
-        symbols.update((u.to_dict() or {}).get("watchlist") or [])
+    tickers = aggregate_watchlists(load_users(db), us_only=True)
 
     # **米国株だけ。** EDGARは米国の制度なので、`.T` などの接尾辞が付くものは対象外
-    tickers = sorted(s for s in symbols if "." not in s and s)
     ref.set({"tickers": tickers, "updatedAt": datetime.now(UTC).isoformat()})
     print(f"和集合: {len(tickers)} 銘柄")
-    return set(tickers)
+    return set(valid_watchlist(tickers, us_only=True, limit=MAX_SHARED_SYMBOLS))
 
 
 def already_stored(db, accession_numbers):
@@ -837,7 +842,7 @@ def purge_expired(db):
         stale = list(query.limit(PURGE_LIMIT).stream())
     except Exception as e:
         # 索引が無い・権限が無いなど。**取り込みは止めない**（掃除は次回でよい）
-        print(f"期限切れの取得に失敗したので掃除を飛ばす: {e}")
+        print(f"期限切れの取得に失敗したので掃除を飛ばす: {safe_exception(e)}")
         return
 
     if not stale:
@@ -852,7 +857,7 @@ def purge_expired(db):
             batch.commit()
             deleted += len(stale[i:i + BATCH_SIZE])
         except Exception as e:
-            print(f"削除に失敗したので中断: {e}")
+            print(f"削除に失敗したので中断: {safe_exception(e)}")
             break
 
     print(f"保持期間({RETENTION_DAYS}日)を過ぎた提出書類を {deleted} 件消した"
@@ -897,7 +902,7 @@ def collect_candidates(cik_map, watched):
         try:
             entries = fetch_current(form)
         except Exception as e:
-            print(f"{form}: 取得に失敗したので飛ばす {e}")
+            print(f"{form}: 取得に失敗したので飛ばす {safe_exception(e)}")
             continue
         picked = select(entries, form, cik_map, watched)
         print(f"{form}: フィード {len(entries)} 件 → 対象銘柄 {len(picked)} 件")
@@ -971,11 +976,10 @@ def main(db, client):
     written = skipped = 0
 
     for entry in order:
-        label = f"{entry['ticker']} {entry['form']} {entry['accessionNo']}"
         body, extra = build_body(entry)
         if not body:
             # Form 4 で市場での売買が無かった、本文を取れなかった等
-            print(f"  {label}: 出す中身が無いので飛ばす")
+            print("提出本文に出す中身が無いので飛ばす")
             skipped += 1
             continue
 
@@ -985,7 +989,6 @@ def main(db, client):
             continue
 
         doc = to_document(entry, entry["impact"], summary, extra)
-        print(f"  {label} [{doc['impact']}] {doc['headline']['ja']}")
         if dry_run:
             continue
         db.collection(NEWS_COLLECTION).document(entry["accessionNo"]).set(doc)
@@ -1024,7 +1027,7 @@ def inspect():
         try:
             entries = fetch_current(form)
         except Exception as e:
-            print(f"  取得に失敗: {e}")
+            print(f"  取得に失敗: {safe_exception(e)}")
             continue
         print(f"  フィード {len(entries)} 件")
         if not entries:
@@ -1074,18 +1077,22 @@ def inspect():
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--inspect", action="store_true", help="取得と解釈だけ試す")
-    args = parser.parse_args()
+    try:
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--inspect", action="store_true", help="取得と解釈だけ試す")
+        args = parser.parse_args()
 
-    if args.inspect:
-        sys.exit(inspect())
+        if args.inspect:
+            sys.exit(inspect())
 
-    import firebase_admin
-    from anthropic import Anthropic
-    from firebase_admin import credentials, firestore
+        import firebase_admin
+        from anthropic import Anthropic
+        from firebase_admin import credentials, firestore
 
-    service_account = json.loads(os.environ["FIREBASE_SERVICE_ACCOUNT"])
-    firebase_admin.initialize_app(credentials.Certificate(service_account))
+        service_account = json.loads(os.environ["FIREBASE_SERVICE_ACCOUNT"])
+        firebase_admin.initialize_app(credentials.Certificate(service_account))
 
-    main(firestore.client(), Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"].strip()))
+        main(firestore.client(), Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"].strip()))
+    except Exception as error:
+        print(f"実行に失敗: {safe_exception(error)}")
+        raise SystemExit(1) from None

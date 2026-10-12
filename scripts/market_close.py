@@ -22,6 +22,13 @@ from datetime import datetime, timedelta, timezone
 
 import firebase_admin
 import requests
+
+from security import (
+    safe_exception,
+    user_data,
+    notification_token,
+    load_users,
+)
 from firebase_admin import credentials, firestore, messaging
 
 import i18n
@@ -148,37 +155,35 @@ def send(messages, pref_key):
 
     `messages` は言語コード → (件名, 本文) の辞書。
     """
-    users = list(db.collection("users").stream())
+    users = load_users(db)
     print(f"ユーザー数: {len(users)}")
 
     sent = failed = skipped = 0
     for u in users:
-        data = u.to_dict()
-        token = data.get("fcmToken")
+        data = user_data(u)
+        token = notification_token(data)
         if not token:
-            print(f"{u.id}: トークンが無いためスキップ")
+            skipped += 1
             continue
         # 設定が無い利用者は既定でオン。アプリを更新していない人にも届く
         if data.get(pref_key, True) is False:
             skipped += 1
-            print(f"{u.id}: {pref_key} がオフのためスキップ")
             continue
 
         # 言語の指定が無い利用者は日本語。アプリを更新していない人の
         # 通知がある日いきなり英語になるのを避ける
         title, body = messages[i18n.display_language(data)]
         try:
-            res = messaging.send(
+            messaging.send(
                 messaging.Message(
                     notification=messaging.Notification(title=title, body=body),
                     token=token,
                 )
             )
             sent += 1
-            print(f"通知送信成功: {u.id} → FCM応答={res}")
         except Exception as e:
             failed += 1
-            print(f"通知送信失敗: {u.id} → {repr(e)}")
+            print(f"通知送信失敗: {safe_exception(e)}")
 
     print(f"送信 {sent} 件 / 失敗 {failed} 件 / 設定オフ {skipped} 件")
 
@@ -195,7 +200,7 @@ def main():
         try:
             data = fetch_index(symbol)
         except Exception as e:
-            print(f"{name}({symbol}) の取得に失敗: {repr(e)}")
+            print(f"{name}({symbol}) の取得に失敗: {safe_exception(e)}")
             return
         if data is None:
             print(f"{name}({symbol}) のデータが空のため中止")
@@ -222,9 +227,13 @@ def main():
 
 
 if __name__ == "__main__":
-    # 送信しない確認だけなら認証情報を要求しない
-    if os.environ.get("DRY_RUN") != "1":
-        cred = credentials.Certificate(json.loads(os.environ["FIREBASE_SERVICE_ACCOUNT"]))
-        firebase_admin.initialize_app(cred)
-        db = firestore.client()
-    main()
+    try:
+        # 送信しない確認だけなら認証情報を要求しない
+        if os.environ.get("DRY_RUN") != "1":
+            cred = credentials.Certificate(json.loads(os.environ["FIREBASE_SERVICE_ACCOUNT"]))
+            firebase_admin.initialize_app(cred)
+            db = firestore.client()
+        main()
+    except Exception as error:
+        print(f"実行に失敗: {safe_exception(error)}")
+        raise SystemExit(1) from None

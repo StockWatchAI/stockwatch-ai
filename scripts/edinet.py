@@ -42,6 +42,14 @@ from datetime import date, datetime, timedelta, timezone
 
 import requests
 
+from security import (
+    safe_exception,
+    user_data,
+    notification_token,
+    valid_watchlist,
+    load_users,
+)
+
 import i18n
 
 DOCUMENTS_URL = "https://api.edinet-fsa.go.jp/api/v2/documents.json"
@@ -142,7 +150,7 @@ def inspect():
         try:
             data = fetch_documents(day, api_key)
         except Exception as e:
-            print(f"  取得に失敗: {e}")
+            print(f"  取得に失敗: {safe_exception(e)}")
             continue
 
         meta = data.get("metadata") or {}
@@ -181,7 +189,7 @@ def inspect():
         print("\n  === 対応表（Edinetcode.zip）===")
         mapping, err = load_code_map()
         if err:
-            print(f"  対応表を作れなかった: {err}")
+            print(f"  対応表を作れなかった: {safe_exception(err)}")
             return 1
         print(f"  対応表の件数（証券コードを持つEDINETコード）: {len(mapping)}")
 
@@ -283,20 +291,20 @@ def notify(db, items):
     空売りと同じで、全員に同じ一覧を送っても持っていない銘柄の話にしかならない。
     設定が無い利用者は既定でオンとして扱う（アプリを更新していない人にも届かせる）。
     """
-    users = list(db.collection("users").stream())
+    users = load_users(db)
     print(f"ユーザー数: {len(users)}")
 
     sent = failed = skipped = 0
     for u in users:
-        u_data = u.to_dict()
-        token = u_data.get("fcmToken")
+        u_data = user_data(u)
+        token = notification_token(u_data)
         if not token:
             continue
         if u_data.get("notifyLargeHolding", True) is False:
             skipped += 1
             continue
 
-        hits = [items[s] for s in (u_data.get("watchlist") or []) if s in items]
+        hits = [items[s] for s in valid_watchlist(u_data.get("watchlist")) if s in items]
         if not hits:
             continue
         hits = hits[:TOP_N]
@@ -317,7 +325,7 @@ def notify(db, items):
                 f"{h['symbol']} {h['name']} ({', '.join(h['filers'][:2])})" for h in hits
             )
         try:
-            res = messaging.send(
+            messaging.send(
                 messaging.Message(
                     notification=messaging.Notification(title=title, body=body),
                     data={"symbol": hits[0]["symbol"]},
@@ -325,10 +333,9 @@ def notify(db, items):
                 )
             )
             sent += 1
-            print(f"通知送信成功: {u.id} → FCM応答={res}")
         except Exception as e:
             failed += 1
-            print(f"通知送信失敗: {u.id} → {repr(e)}")
+            print(f"通知送信失敗: {safe_exception(e)}")
 
     print(f"送信 {sent} 件 / 失敗 {failed} 件 / 設定オフ {skipped} 件")
 
@@ -342,7 +349,7 @@ def main():
     code_map, err = load_code_map()
     if err:
         # 対応表が作れないと銘柄に紐付けられない。誤った宛先に送るより送らない
-        print(f"対応表を作れないため中止: {err}")
+        print(f"対応表を作れないため中止: {safe_exception(err)}")
         return
     print(f"対応表: {len(code_map)} 件")
 
@@ -355,7 +362,7 @@ def main():
         try:
             total, items = collect(day, api_key, code_map)
         except Exception as e:
-            print(f"{source_date}: 取得に失敗したため中止 {e}")
+            print(f"{source_date}: 取得に失敗したため中止 {safe_exception(e)}")
             return
 
         if total == 0:
@@ -389,18 +396,22 @@ def main():
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--inspect", action="store_true", help="取得と解釈だけ試す")
-    args = parser.parse_args()
+    try:
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--inspect", action="store_true", help="取得と解釈だけ試す")
+        args = parser.parse_args()
 
-    if args.inspect:
-        sys.exit(inspect())
+        if args.inspect:
+            sys.exit(inspect())
 
-    import firebase_admin
-    from firebase_admin import credentials, firestore, messaging
+        import firebase_admin
+        from firebase_admin import credentials, firestore, messaging
 
-    service_account = json.loads(os.environ["FIREBASE_SERVICE_ACCOUNT"])
-    firebase_admin.initialize_app(credentials.Certificate(service_account))
-    db = firestore.client()
+        service_account = json.loads(os.environ["FIREBASE_SERVICE_ACCOUNT"])
+        firebase_admin.initialize_app(credentials.Certificate(service_account))
+        db = firestore.client()
 
-    main()
+        main()
+    except Exception as error:
+        print(f"実行に失敗: {safe_exception(error)}")
+        raise SystemExit(1) from None
